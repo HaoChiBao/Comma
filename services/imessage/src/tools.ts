@@ -1,3 +1,4 @@
+import { ChatOpenRouter } from "@langchain/openrouter";
 import { tool } from "langchain";
 import { z } from "zod";
 
@@ -10,6 +11,35 @@ const catalog: { name: string; description: string; schema: z.ZodObject }[] = [
     name: "list_tasks",
     description: "List Acme Computing procurement tasks. Returns id, public_code, status, and quantity. Call this first when you do not already have a task id.",
     schema: z.object({}),
+  },
+  {
+    name: "submit_message",
+    description:
+      "Send the person's words into procurement. Starts a new request, fills in missing details on an open request, and applies APPROVE APV- or REJECT APV- decisions. Does not invent quotes.",
+    schema: z.object({
+      text: z.string().describe("The exact message to submit"),
+    }),
+  },
+  {
+    name: "get_bom",
+    description: "Read the bill of materials for a task: component, required SKU, units per computer, and allowed substitutes.",
+    schema: taskId,
+  },
+  {
+    name: "get_plan",
+    description:
+      "Read the saved purchase plan, including lines, landed cost, readiness, and rejected alternatives. Does not create a new plan.",
+    schema: taskId,
+  },
+  {
+    name: "get_approval",
+    description: "Read the open approval: APV token, approver name, and expiry. Does not approve the plan.",
+    schema: taskId,
+  },
+  {
+    name: "cancel_task",
+    description: "Cancel a procurement task before purchase orders are sent.",
+    schema: taskId,
   },
   {
     name: "get_task",
@@ -101,5 +131,35 @@ export function procurementTools(apiUrl: string, token: string) {
         schema: spec.schema,
       },
     ),
+  );
+}
+
+export function webSearchTool(model: string) {
+  return tool(
+    async ({ query }) => {
+      const searcher = new ChatOpenRouter({
+        model,
+        plugins: [{ id: "web", max_results: 5 }],
+        maxTokens: 700,
+      });
+      const message = await searcher.invoke([
+        {
+          role: "system",
+          content:
+            "Search the public web and reply with a JSON array of up to 5 objects with title, url, and snippet. These are public pages, not supplier quotes.",
+        },
+        { role: "user", content: query },
+      ]);
+      const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+      return content.slice(0, 4_000);
+    },
+    {
+      name: "web_search",
+      description:
+        "Search the public web for component specs, manufacturers, and lead times. Results are not supplier quotes and must not be saved as quotes or used as plan prices.",
+      schema: z.object({
+        query: z.string().describe("What to look up"),
+      }),
+    },
   );
 }

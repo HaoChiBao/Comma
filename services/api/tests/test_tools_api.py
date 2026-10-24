@@ -12,8 +12,28 @@ def test_tool_route_lists_acme_tasks_and_rejects_a_bad_token(client):
 
         listed = client.get("/tools", headers={"Authorization": "Bearer test-tool-token"})
         assert listed.status_code == 200
-        assert "list_tasks" in listed.json()["tools"]
-        assert "get_task" in listed.json()["tools"]
+        names = listed.json()["tools"]
+        assert "list_tasks" in names
+        assert "submit_message" in names
+        assert "get_bom" in names
+        assert "get_plan" in names
+        assert "get_approval" in names
+        assert "cancel_task" in names
+        assert "get_task" in names
+
+        missing_text = client.post(
+            "/tools/submit_message",
+            json={},
+            headers={"Authorization": "Bearer test-tool-token"},
+        )
+        assert missing_text.status_code == 400
+
+        missing_task = client.post(
+            "/tools/get_bom",
+            json={"task_id": "not-a-uuid"},
+            headers={"Authorization": "Bearer test-tool-token"},
+        )
+        assert missing_task.status_code == 400
 
         response = client.post("/tools/list_tasks", json={}, headers={"Authorization": "Bearer test-tool-token"})
         assert response.status_code == 200, response.text

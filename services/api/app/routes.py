@@ -11,7 +11,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.adapters.email import verify_email_signature
-from app.adapters.photon import SignatureError, verify_and_parse
+from app.adapters.photon import InboundMessage, SignatureError, verify_and_parse
 from app.auth import current_actor, issue_token, require_task
 from app.clock import clock
 from app.db import get_db
@@ -19,16 +19,18 @@ from app.errors import ApiError, IntegrationNotConfigured
 from app.models import Actor, Company, Outbox, ProcurementTask, PurchaseOrder, WorkEvent
 from app.pipeline import (
     acknowledge_orders,
+    cancel_task,
     disrupt_ram,
     handle_inbound_text,
     handle_supplier_reply,
     reject_order,
     simulate_all_replies,
 )
-from app.adapters.photon import InboundMessage
 from app.settings import settings
 from app.tools import TOOL_NAMES, ToolContext, execute
 from app.views import sandbox_for_task, task_detail, task_summary
+
+CHAT_TOOLS = ("list_tasks", "submit_message", "get_bom", "get_plan", "get_approval", "cancel_task")
 
 router = APIRouter()
 
@@ -88,6 +90,38 @@ def acme_company(db: Session) -> Company:
     if company is None:
         raise ApiError(503, "not_ready", "Acme Computing is not seeded")
     return company
+
+
+def acme_manager(db: Session, company: Company) -> Actor:
+    actor = db.scalar(
+        select(Actor).where(
+            Actor.company_id == company.id,
+            Actor.role == "procurement_manager",
+            Actor.active.is_(True),
+        )
+    )
+    if actor is None:
+        raise ApiError(503, "not_ready", "Acme has no procurement manager")
+    return actor
+
+
+def acme_task(db: Session, company: Company, task_id: object) -> ProcurementTask:
+    try:
+        parsed = uuid.UUID(str(task_id))
+    except ValueError as exc:
+        raise ApiError(400, "tool_failed", "task_id must be a uuid") from exc
+    task = db.get(ProcurementTask, parsed)
+    if task is None or task.company_id != company.id:
+        raise ApiError(404, "not_found", "task not found")
+    return task
+
+
+def current_plan(detail: dict) -> dict | None:
+    plans = detail.get("plans") or []
+    for plan in reversed(plans):
+        if plan.get("status") in ("proposed", "approved", "executed"):
+            return plan
+    return None
 
 
 @router.get("/health")
@@ -409,7 +443,7 @@ def dev_tick(_: None = Depends(require_demo)):
 @router.get("/tools")
 def list_tools(request: Request):
     require_tool_token(request)
-    return {"tools": ["list_tasks", *TOOL_NAMES]}
+    return {"tools": [*CHAT_TOOLS, *TOOL_NAMES]}
 
 
 @router.post("/tools/{name}")
@@ -439,11 +473,55 @@ def invoke_tool(
                 for task in rows
             ]
         }
+    if name == "submit_message":
+        text = str(body.get("text") or "").strip()
+        if not text:
+            raise ApiError(400, "tool_failed", "text is required")
+        actor = acme_manager(db, company)
+        return handle_inbound_text(
+            db,
+            InboundMessage(
+                provider_message_id=f"imessage-tool-{uuid.uuid4()}",
+                sender=actor.phone_e164,
+                recipient=None,
+                text=text,
+                content_type="text",
+                sent_at=clock.now(),
+                raw={"source": "imessage_tool"},
+            ),
+        )
+    if name in ("get_bom", "get_plan", "get_approval", "cancel_task"):
+        task = acme_task(db, company, body.get("task_id"))
+        if name == "cancel_task":
+            return cancel_task(db, acme_manager(db, company), task.id)
+        detail = task_detail(db, task)
+        if name == "get_bom":
+            return {"task_id": str(task.id), "public_code": task.public_code, "bom": detail["bom"]}
+        if name == "get_plan":
+            plan = current_plan(detail)
+            return {
+                "task_id": str(task.id),
+                "public_code": task.public_code,
+                "plan": plan,
+                "note": None if plan else "No saved plan yet.",
+            }
+        approval = detail.get("pending_approval")
+        if approval:
+            approver = db.get(Actor, uuid.UUID(approval["requested_from"]))
+            approval = {**approval, "approver_name": approver.display_name if approver else None}
+        return {
+            "task_id": str(task.id),
+            "public_code": task.public_code,
+            "approval": approval,
+            "note": None if approval else "No open approval.",
+        }
     if name not in TOOL_NAMES:
         raise ApiError(404, "unknown_tool", name)
     ctx = ToolContext(company_id=company.id, actor_type="imessage_agent")
     try:
         result = execute(db, ctx, {}, {"tool": name, "input": body})
+    except ApiError:
+        raise
     except Exception as exc:
         db.rollback()
         logging.getLogger("procurement.tools").exception("tool %s failed", name)

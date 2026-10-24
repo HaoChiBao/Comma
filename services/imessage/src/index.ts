@@ -3,7 +3,7 @@ import { MemorySaver } from "@langchain/langgraph";
 import { createDeepAgent } from "deepagents";
 import { Spectrum } from "spectrum-ts";
 import { imessage } from "@spectrum-ts/imessage";
-import { procurementTools } from "./tools.ts";
+import { procurementTools, webSearchTool } from "./tools.ts";
 
 // Live iMessage layer for the procurement agent.
 // The chat runtime is the Deep Agents harness (filesystem, planning, subagents)
@@ -21,9 +21,9 @@ const toolToken = process.env.TOOL_API_TOKEN;
 const agent = createDeepAgent({
   model: new ChatOpenRouter({ model }),
   checkpointer: new MemorySaver(),
-  tools: procurementTools(procurementApiUrl, toolToken ?? ""),
+  tools: [...procurementTools(procurementApiUrl, toolToken ?? ""), webSearchTool(model)],
   systemPrompt:
-    "You are a helpful assistant texting over iMessage for Acme Computing procurement. Use list_tasks to find a task id before the other procurement tools. Supplier email stays in the sandbox and is not delivered. You cannot approve a plan or create a purchase order. Reply in plain conversational text. Keep answers short unless the person asks for detail. Do not mention internal tools, files, or planning.",
+    "You are a helpful assistant texting over iMessage for Acme Computing procurement. Use list_tasks before task-specific tools. Use submit_message to start a request, add missing details, or pass APPROVE APV- and REJECT APV- decisions. Use web_search only for public specs and manufacturers. Web prices are not supplier quotes. Supplier email stays in the sandbox and is not delivered. You cannot approve a plan yourself or create a purchase order. Reply in plain conversational text. Keep answers short unless the person asks for detail. Do not mention internal tools, files, or planning.",
 });
 
 function safeError(error: unknown): string {
