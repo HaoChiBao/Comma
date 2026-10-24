@@ -3,6 +3,7 @@ import { MemorySaver } from "@langchain/langgraph";
 import { createDeepAgent } from "deepagents";
 import { Spectrum } from "spectrum-ts";
 import { imessage } from "@spectrum-ts/imessage";
+import { procurementTools } from "./tools.ts";
 
 // Live iMessage layer for the procurement agent.
 // The chat runtime is the Deep Agents harness (filesystem, planning, subagents)
@@ -14,17 +15,20 @@ const projectId = process.env.PROJECT_ID ?? process.env.SPECTRUM_PROJECT_ID;
 const projectSecret = process.env.PROJECT_SECRET ?? process.env.SPECTRUM_PROJECT_SECRET;
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const model = process.env.OPENROUTER_MODEL || "openai/gpt-6-astra";
+const procurementApiUrl = process.env.PROCUREMENT_API_URL || "https://api-production-69e9.up.railway.app";
+const toolToken = process.env.TOOL_API_TOKEN;
 
 const agent = createDeepAgent({
   model: new ChatOpenRouter({ model }),
   checkpointer: new MemorySaver(),
+  tools: procurementTools(procurementApiUrl, toolToken ?? ""),
   systemPrompt:
-    "You are a helpful assistant texting over iMessage. Reply in plain conversational text. Keep answers short unless the person asks for detail. Do not mention internal tools, files, or planning.",
+    "You are a helpful assistant texting over iMessage for Acme Computing procurement. Use list_tasks to find a task id before the other procurement tools. Supplier email stays in the sandbox and is not delivered. You cannot approve a plan or create a purchase order. Reply in plain conversational text. Keep answers short unless the person asks for detail. Do not mention internal tools, files, or planning.",
 });
 
 function safeError(error: unknown): string {
   let text = error instanceof Error ? error.message : "unknown error";
-  for (const secret of [projectSecret, openRouterKey]) {
+  for (const secret of [projectSecret, openRouterKey, toolToken]) {
     if (secret) text = text.replaceAll(secret, "[redacted]");
   }
   return text;
@@ -65,12 +69,12 @@ async function chat(sender: string, text: string): Promise<string> {
   return answer;
 }
 
-if (!projectId || !projectSecret || !openRouterKey) {
-  console.error("Startup failed: PROJECT_ID, PROJECT_SECRET, and OPENROUTER_API_KEY must be set. Refusing to start.");
+if (!projectId || !projectSecret || !openRouterKey || !toolToken) {
+  console.error("Startup failed: PROJECT_ID, PROJECT_SECRET, OPENROUTER_API_KEY, and TOOL_API_TOKEN must be set. Refusing to start.");
   process.exit(1);
 }
 
-console.log(`Connecting iMessage agent to Photon project ${projectId} with Deep Agents on ${model}`);
+console.log(`Connecting iMessage agent to Photon project ${projectId} with Deep Agents on ${model}, procurement tools at ${procurementApiUrl}`);
 
 let app;
 try {

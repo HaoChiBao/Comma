@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     demo_mode: bool = True
     session_secret: str = "dev-only-change-me"
+    tool_api_token: str = ""
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     demo_clock: str = "2026-10-24T15:00:00+00:00"
 

@@ -1,8 +1,10 @@
+import hmac
 import json
+import logging
 import time
 import uuid
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, text
@@ -14,7 +16,7 @@ from app.auth import current_actor, issue_token, require_task
 from app.clock import clock
 from app.db import get_db
 from app.errors import ApiError, IntegrationNotConfigured
-from app.models import Actor, Company, Outbox, PurchaseOrder, WorkEvent
+from app.models import Actor, Company, Outbox, ProcurementTask, PurchaseOrder, WorkEvent
 from app.pipeline import (
     acknowledge_orders,
     disrupt_ram,
@@ -25,6 +27,7 @@ from app.pipeline import (
 )
 from app.adapters.photon import InboundMessage
 from app.settings import settings
+from app.tools import TOOL_NAMES, ToolContext, execute
 from app.views import sandbox_for_task, task_detail, task_summary
 
 router = APIRouter()
@@ -68,6 +71,23 @@ class ResetIn(BaseModel):
 def require_demo() -> None:
     if not settings.demo_routes_enabled:
         raise ApiError(404, "not_found", "not found")
+
+
+def require_tool_token(request: Request) -> None:
+    expected = settings.tool_api_token
+    if not expected:
+        raise ApiError(503, "not_configured", "TOOL_API_TOKEN is not set")
+    header = request.headers.get("authorization", "")
+    token = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
+    if not token or not hmac.compare_digest(token, expected):
+        raise ApiError(401, "unauthorized", "invalid tool token")
+
+
+def acme_company(db: Session) -> Company:
+    company = db.scalar(select(Company).where(Company.name == "Acme Computing"))
+    if company is None:
+        raise ApiError(503, "not_ready", "Acme Computing is not seeded")
+    return company
 
 
 @router.get("/health")
@@ -384,3 +404,49 @@ def dev_tick(_: None = Depends(require_demo)):
     from app.worker import drain
 
     return {"processed": drain()}
+
+
+@router.get("/tools")
+def list_tools(request: Request):
+    require_tool_token(request)
+    return {"tools": ["list_tasks", *TOOL_NAMES]}
+
+
+@router.post("/tools/{name}")
+def invoke_tool(
+    name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    payload: dict = Body(default_factory=dict),
+):
+    require_tool_token(request)
+    company = acme_company(db)
+    body = payload or {}
+    if name == "list_tasks":
+        rows = db.scalars(
+            select(ProcurementTask)
+            .where(ProcurementTask.company_id == company.id)
+            .order_by(ProcurementTask.created_at.desc())
+        ).all()
+        return {
+            "tasks": [
+                {
+                    "id": str(task.id),
+                    "public_code": task.public_code,
+                    "status": task.status,
+                    "quantity": task.quantity,
+                }
+                for task in rows
+            ]
+        }
+    if name not in TOOL_NAMES:
+        raise ApiError(404, "unknown_tool", name)
+    ctx = ToolContext(company_id=company.id, actor_type="imessage_agent")
+    try:
+        result = execute(db, ctx, {}, {"tool": name, "input": body})
+    except Exception as exc:
+        db.rollback()
+        logging.getLogger("procurement.tools").exception("tool %s failed", name)
+        raise ApiError(400, "tool_failed", f"{type(exc).__name__}: {exc}") from exc
+    db.commit()
+    return result
