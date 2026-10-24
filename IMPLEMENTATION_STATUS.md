@@ -31,7 +31,6 @@ What can be shown without external services: the full 8-component, 100-computer 
 - Live Photon send. Stable docs (photon.codes/docs, 2026-10-24) have no public HTTP send endpoint. `space.send` via `spectrum-ts` needs a project id and key, which were not provided.
 - Live email. No SMTP credentials.
 - Live LLM. No API key. The demo does not call one.
-- `docker compose up --build` was not executed in this environment. `docker` is not installed. Migrations, seed, the API, pytest, and the browser demo were run against local PostgreSQL 16.
 
 P2 (voice, negotiation, supplier discovery, policy learning, CRM, ERP) is out of scope.
 
@@ -55,10 +54,36 @@ npx playwright test --reporter=line
 
 Result: `1 passed (8.5s)`. The script signed in as Maya, sent the 100-computer request, saw sandbox RFQs, simulated replies, checked a landed cost under $200,000 with readiness 100 of 100, disrupted RAM by 50, approved the new plan by mock iMessage text, saw purchase orders, acknowledged them, and opened the audit entry `orders_confirmed`.
 
-`docker compose up --build`: not run. Command `docker` was not found.
+Docker Compose, from `/workspace`. `sudo` was required for the Docker socket. `-d` was used so the process exits while the stack stays up.
+
+The first `sudo docker compose up --build -d` exited 0 and built the images (API/worker pip install, Next.js `npm run build` compiled, containers created). `GET http://127.0.0.1:8000/health` then failed with `curl: (56) Recv failure: Connection reset by peer`. The API container could not open TCP to `db:5432` (timeout). This host had `net.bridge.bridge-nf-call-iptables=1` and an iptables-legacy `FORWARD` policy of `DROP` that did not accept the Compose bridge, so same-bridge traffic was dropped. Host-published port 3000 still returned the dashboard. No Compose file change was required.
+
+Host commands that restored container-to-container TCP:
+
+```bash
+sudo sysctl -w net.bridge.bridge-nf-call-iptables=0
+sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=0
+sudo iptables-legacy -P FORWARD ACCEPT
+```
+
+Clean startup after that:
+
+```bash
+sudo docker compose down
+sudo docker compose up --build -d
+```
+
+`docker compose down` exit 0. `sudo docker compose up --build -d` exit 0. All four containers were up (db healthy). Checks immediately after that command:
+
+- `GET http://127.0.0.1:8000/health` → 200 `{"status":"ok"}`
+- `GET http://127.0.0.1:8000/ready` → 200 `{"status":"ready"}`
+- `GET http://127.0.0.1:8000/api/meta` → 200, banner `Mock mode — no live iMessage or email delivery. Supplier mail stays in the sandbox.`, `live_imessage` false, `live_email` false
+- `GET http://127.0.0.1:3000/` → 200, title `Acme procurement`, page includes `Mock mode` and `login-phone`
+- `POST /api/auth/login` `{"phone_e164":"+15555550100"}` → 200, Maya Chen, Acme Computing; `GET /api/tasks` → one task, `ACME-1001`, `AWAITING_QUOTES`
+- worker container `status=running`, `ExitCode=0`
 
 ## Risks
 
 - A restarted worker resumes RFQ delivery and leaves pending approvals untouched. It does not talk to a real supplier.
 - The deterministic parser handles the seeded sentence and the structured sandbox replies. Free-form supplier prose needs the live LLM adapter, which is unwired without a key.
-- Compose file paths and the local migrate/seed/uvicorn path match, but the image build itself is unverified here.
+- On this VM, Compose networking needed the bridge-netfilter change above before the API could reach Postgres. A normal Docker host that already forwards bridge traffic does not need that step.

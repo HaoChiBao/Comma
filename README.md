@@ -85,4 +85,4 @@ DATABASE_URL=postgresql+psycopg://acme:acme@localhost:5432/procurement_test PYTH
 cd ../../apps/web && npx playwright test
 ```
 
-Results from this workspace are in `IMPLEMENTATION_STATUS.md`. Docker was not executed here because the daemon is not installed; migrate, seed, pytest, and the browser demo were run against local Postgres.
+Results from this workspace are in `IMPLEMENTATION_STATUS.md`. `sudo docker compose up --build -d` from the repo root exited 0 after a host bridge-netfilter change recorded there. The API answered `/health`, `/ready`, and `/api/meta`, and the dashboard on port 3000 returned the Acme procurement page.
