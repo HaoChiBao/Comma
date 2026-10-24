@@ -1,0 +1,90 @@
+:root {
+  --paper: #f3eee4;
+  --card: #fffaf3;
+  --ink: #1d1914;
+  --muted: #5e564c;
+  --line: #e3d5c4;
+  --accent: #8d4318;
+  --accent-ink: #fff8f2;
+  --ok: #24573a;
+  --warn: #8a4b12;
+  --bad: #7d2c2c;
+  --shadow: 0 1px 0 rgba(60, 40, 20, 0.04);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+a { color: var(--accent); }
+button, input, textarea {
+  font: inherit;
+}
+button {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 0;
+  border-radius: 6px;
+  padding: 0.55rem 0.85rem;
+  cursor: pointer;
+}
+button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+input, textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: white;
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+}
+.shell { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
+.banner {
+  background: #f3e1c4;
+  color: #5b3412;
+  border-bottom: 1px solid #e2c59a;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.92rem;
+}
+.top {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+}
+h1, h2, h3 { font-family: Palatino, "Iowan Old Style", Georgia, serif; font-weight: 600; }
+.muted { color: var(--muted); }
+.grid { display: grid; gap: 1rem; }
+.cards { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 1rem; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem;
+  box-shadow: var(--shadow);
+}
+.row { display: flex; gap: 0.5rem; align-items: center; }
+.metrics { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.metric strong { display: block; font-size: 1.25rem; }
+table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+th, td { text-align: left; padding: 0.35rem 0.4rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.status {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  background: #efe6d8;
+  font-size: 0.82rem;
+}
+.tree { list-style: none; padding-left: 0; }
+.tree li { margin: 0.45rem 0; }
+.alloc { color: var(--muted); font-size: 0.88rem; }
+.error { color: var(--bad); }
+@media (max-width: 800px) {
+  .cards { grid-template-columns: 1fr; }
+}
