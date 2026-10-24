@@ -248,6 +248,11 @@ ACTORS = [
     {"key": "maya", "name": "Maya Chen", "role": "procurement_manager", "phone": "+15555550100"},
     {"key": "jordan", "name": "Jordan Hale", "role": "controller", "phone": "+15555550101"},
     {"key": "sam", "name": "Sam Ortiz", "role": "requester", "phone": "+15555550102"},
+    # Live Photon texters. They belong to Acme until a person is moved to another company.
+    {"key": "james", "name": "James Yang", "role": "requester", "phone": "+16479375288"},
+    {"key": "allison", "name": "Allison", "role": "requester", "phone": "+16135818378"},
+    {"key": "william", "name": "William", "role": "requester", "phone": "+14163474090"},
+    {"key": "nathan", "name": "Nathan", "role": "requester", "phone": "+16476320753"},
 ]
 
 BETA_ACTOR = {"key": "riley", "name": "Riley Quinn", "role": "procurement_manager", "phone": "+15555550200"}

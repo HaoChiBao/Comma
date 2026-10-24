@@ -3,6 +3,7 @@ from app.settings import settings
 
 def test_tool_route_lists_acme_tasks_and_rejects_a_bad_token(client):
     settings.tool_api_token = "test-tool-token"
+    auth = {"Authorization": "Bearer test-tool-token", "X-Sender-Phone": "+15555550100"}
     try:
         missing = client.post("/tools/list_tasks", json={})
         assert missing.status_code == 401
@@ -21,25 +22,25 @@ def test_tool_route_lists_acme_tasks_and_rejects_a_bad_token(client):
         assert "cancel_task" in names
         assert "get_task" in names
 
-        missing_text = client.post(
-            "/tools/submit_message",
-            json={},
-            headers={"Authorization": "Bearer test-tool-token"},
-        )
+        stranger = client.post("/tools/list_tasks", json={}, headers={"Authorization": "Bearer test-tool-token", "X-Sender-Phone": "+19995550199"})
+        assert stranger.status_code == 403
+
+        identity = client.get("/tools/identity", headers=auth)
+        assert identity.status_code == 200
+        assert identity.json()["company_name"] == "Acme Computing"
+        assert identity.json()["role"] == "procurement_manager"
+
+        missing_text = client.post("/tools/submit_message", json={}, headers=auth)
         assert missing_text.status_code == 400
 
-        missing_task = client.post(
-            "/tools/get_bom",
-            json={"task_id": "not-a-uuid"},
-            headers={"Authorization": "Bearer test-tool-token"},
-        )
+        missing_task = client.post("/tools/get_bom", json={"task_id": "not-a-uuid"}, headers=auth)
         assert missing_task.status_code == 400
 
-        response = client.post("/tools/list_tasks", json={}, headers={"Authorization": "Bearer test-tool-token"})
+        response = client.post("/tools/list_tasks", json={}, headers=auth)
         assert response.status_code == 200, response.text
         assert response.json()["tasks"] == []
 
-        unknown = client.post("/tools/approve", json={}, headers={"Authorization": "Bearer test-tool-token"})
+        unknown = client.post("/tools/approve", json={}, headers=auth)
         assert unknown.status_code == 404
     finally:
         settings.tool_api_token = ""

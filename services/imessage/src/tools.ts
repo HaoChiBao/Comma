@@ -1,6 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { tool } from "langchain";
 import { z } from "zod";
+
+export const senderContext = new AsyncLocalStorage<string>();
+
+export function normalizePhone(value: string): string {
+  let text = value.trim().replaceAll(" ", "").replaceAll("-", "");
+  if (text.startsWith("00")) text = `+${text.slice(2)}`;
+  if (/^\d+$/.test(text)) text = `+${text}`;
+  return text;
+}
 
 const taskId = z.object({
   task_id: z.string().describe("Procurement task id from list_tasks"),
@@ -9,7 +19,7 @@ const taskId = z.object({
 const catalog: { name: string; description: string; schema: z.ZodObject }[] = [
   {
     name: "list_tasks",
-    description: "List Acme Computing procurement tasks. Returns id, public_code, status, and quantity. Call this first when you do not already have a task id.",
+    description: "List procurement tasks for the sender's organization. Returns id, public_code, status, and quantity. Call this first when you do not already have a task id.",
     schema: z.object({}),
   },
   {
@@ -43,7 +53,7 @@ const catalog: { name: string; description: string; schema: z.ZodObject }[] = [
   },
   {
     name: "get_task",
-    description: "Get one Acme procurement task, including status, quantity, budget, deadline, and destination.",
+    description: "Get one procurement task for the sender's organization, including status, quantity, budget, deadline, and destination.",
     schema: taskId,
   },
   {
@@ -110,11 +120,13 @@ export function procurementTools(apiUrl: string, token: string) {
   return catalog.map((spec) =>
     tool(
       async (input) => {
+        const sender = senderContext.getStore();
         const response = await fetch(`${base}/tools/${spec.name}`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
+            ...(sender ? { "X-Sender-Phone": sender } : {}),
           },
           body: JSON.stringify(input ?? {}),
           signal: AbortSignal.timeout(60_000),

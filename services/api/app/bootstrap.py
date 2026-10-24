@@ -194,6 +194,27 @@ def seed_master(session: Session) -> None:
     )
 
 
+def ensure_actors(session: Session) -> None:
+    """Add organization members that were introduced after the first seed."""
+    acme = session.get(Company, sid("company-acme"))
+    if acme is None:
+        return
+    for actor in ACTORS:
+        found = session.scalar(select(Actor).where(Actor.phone_e164 == actor["phone"]))
+        if found is not None:
+            continue
+        session.add(
+            Actor(
+                id=sid(f"actor-{actor['key']}"),
+                company_id=acme.id,
+                display_name=actor["name"],
+                role=actor["role"],
+                phone_e164=actor["phone"],
+                active=True,
+            )
+        )
+
+
 def seed(*, reset: bool = False, include_demo_task: bool = True) -> None:
     session = SessionLocal()
     try:
@@ -204,6 +225,8 @@ def seed(*, reset: bool = False, include_demo_task: bool = True) -> None:
         else:
             existing = session.get(Company, sid("company-acme"))
             if existing is not None:
+                ensure_actors(session)
+                session.commit()
                 return
         seed_master(session)
         session.commit()

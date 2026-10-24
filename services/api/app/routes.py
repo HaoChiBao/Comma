@@ -85,6 +85,32 @@ def require_tool_token(request: Request) -> None:
         raise ApiError(401, "unauthorized", "invalid tool token")
 
 
+def normalize_phone(value: str) -> str:
+    text = value.strip().replace(" ", "").replace("-", "")
+    if text.startswith("00"):
+        text = f"+{text[2:]}"
+    if text.isdigit():
+        text = f"+{text}"
+    return text
+
+
+def tool_actor(request: Request, db: Session) -> Actor:
+    phone = normalize_phone(request.headers.get("x-sender-phone", ""))
+    if not phone:
+        raise ApiError(400, "unknown_sender", "X-Sender-Phone is required")
+    actor = db.scalar(select(Actor).where(Actor.phone_e164 == phone, Actor.active.is_(True)))
+    if actor is None:
+        raise ApiError(403, "unknown_sender", "This phone is not a member of an organization")
+    return actor
+
+
+def tool_company(db: Session, actor: Actor) -> Company:
+    company = db.get(Company, actor.company_id)
+    if company is None:
+        raise ApiError(503, "not_ready", "Organization is missing")
+    return company
+
+
 def acme_company(db: Session) -> Company:
     company = db.scalar(select(Company).where(Company.name == "Acme Computing"))
     if company is None:
@@ -446,6 +472,20 @@ def list_tools(request: Request):
     return {"tools": [*CHAT_TOOLS, *TOOL_NAMES]}
 
 
+@router.get("/tools/identity")
+def tool_identity(request: Request, db: Session = Depends(get_db)):
+    require_tool_token(request)
+    actor = tool_actor(request, db)
+    company = tool_company(db, actor)
+    return {
+        "actor_id": str(actor.id),
+        "display_name": actor.display_name,
+        "role": actor.role,
+        "company_id": str(company.id),
+        "company_name": company.name,
+    }
+
+
 @router.post("/tools/{name}")
 def invoke_tool(
     name: str,
@@ -454,7 +494,8 @@ def invoke_tool(
     payload: dict = Body(default_factory=dict),
 ):
     require_tool_token(request)
-    company = acme_company(db)
+    actor = tool_actor(request, db)
+    company = tool_company(db, actor)
     body = payload or {}
     if name == "list_tasks":
         rows = db.scalars(
@@ -477,7 +518,6 @@ def invoke_tool(
         text = str(body.get("text") or "").strip()
         if not text:
             raise ApiError(400, "tool_failed", "text is required")
-        actor = acme_manager(db, company)
         return handle_inbound_text(
             db,
             InboundMessage(
@@ -493,7 +533,7 @@ def invoke_tool(
     if name in ("get_bom", "get_plan", "get_approval", "cancel_task"):
         task = acme_task(db, company, body.get("task_id"))
         if name == "cancel_task":
-            return cancel_task(db, acme_manager(db, company), task.id)
+            return cancel_task(db, actor, task.id)
         detail = task_detail(db, task)
         if name == "get_bom":
             return {"task_id": str(task.id), "public_code": task.public_code, "bom": detail["bom"]}
@@ -517,7 +557,7 @@ def invoke_tool(
         }
     if name not in TOOL_NAMES:
         raise ApiError(404, "unknown_tool", name)
-    ctx = ToolContext(company_id=company.id, actor_type="imessage_agent")
+    ctx = ToolContext(company_id=company.id, actor_type="imessage_agent", actor_id=actor.id)
     try:
         result = execute(db, ctx, {}, {"tool": name, "input": body})
     except ApiError:

@@ -15,7 +15,8 @@
     "@langchain/openrouter": "^0.4.19",
     "deepagents": "^1.15.1",
     "langchain": "^1.5.19",
-    "spectrum-ts": "^12.14.0"
+    "spectrum-ts": "^12.14.0",
+    "supermemory": "^5.0.2"
   },
   "devDependencies": {
     "@types/node": "^22",
