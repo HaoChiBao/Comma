@@ -8,6 +8,11 @@ from app.settings import settings
 
 
 def main() -> None:
+    if os.environ.get("PROCESS_ROLE") == "worker":
+        from app.worker_main import main as run_worker
+
+        run_worker()
+        return
     apply()
     if settings.seed_on_start:
         seed(reset=False, include_demo_task=settings.seed_demo_task)
