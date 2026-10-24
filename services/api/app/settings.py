@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +8,17 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://acme:acme@localhost:5432/procurement"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def use_psycopg_driver(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        if value.startswith("postgres://"):
+            value = "postgresql://" + value[len("postgres://") :]
+        if value.startswith("postgresql://") and not value.startswith("postgresql+"):
+            return "postgresql+psycopg://" + value[len("postgresql://") :]
+        return value
     app_env: str = "development"
     demo_mode: bool = True
     session_secret: str = "dev-only-change-me"

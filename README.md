@@ -2,13 +2,13 @@
 
 P0 vertical slice for a multi-tenant procurement agent. A manager texts a desktop-computer request. The agent builds an 8-component bill of materials, asks approved suppliers for quotes, computes a landed-cost plan with `Decimal` money, and stops at a human approval. Only the approval gateway can create purchase orders. Every transition is written to an append-only audit log.
 
-This repository ships in **mock mode**. It does not deliver iMessage, and it does not send email.
+The procurement API and supplier email ship in **mock mode**. Live iMessage runs separately in `services/imessage`, connected to the Photon project `calhacks`. That process does not send email.
 
 ## Mock mode and live integrations
 
 | Integration | What this build does | What it does not do |
 | --- | --- | --- |
-| Photon / Spectrum iMessage | Verifies Stable webhook signatures (`v0:{timestamp}:{rawBody}`, `X-Spectrum-Signature`). Inbound JSON matches the `messages` event. Outbound text is written to the sandbox ledger with `simulated: true` and `delivered_to_network: false`. | No live send. Stable docs (photon.codes/docs, checked 2026-10-24) expose no public HTTP send API. Live delivery needs the `spectrum-ts` SDK (`space.send`) plus `PHOTON_PROJECT_ID` and `PHOTON_API_KEY`. Those credentials are absent. `PHOTON_MODE=live` fails closed and does not mark a message delivered. |
+| Photon / Spectrum iMessage | The API still verifies Stable webhook signatures (`v0:{timestamp}:{rawBody}`, `X-Spectrum-Signature`) and writes outbound text to the sandbox ledger when `PHOTON_MODE=mock`. Live iMessage is `services/imessage`: `spectrum-ts` with the cloud iMessage provider, `space.send`, and a local `.env` (`PROJECT_ID`, `PROJECT_SECRET`). | `PHOTON_MODE=live` on the API still fails closed. The API process does not open a Spectrum session. Do not commit `services/imessage/.env`. |
 | Supplier email | `EMAIL_MODE=sandbox` stores RFQs and purchase orders in the same ledger. Inbound mail is a local webhook: `X-Email-Signature: sha256=` plus HMAC-SHA256 of the raw body using `EMAIL_WEBHOOK_SECRET`. Correlation uses `RFQ-TOKEN` in the body. The subject is ignored. | This is not Gmail, not a provider mailbox, and not SMTP. `EMAIL_MODE=smtp` exists and is unused unless a host and username are set. The default sandbox never opens a socket. |
 | LLM | `app/adapters/llm.py` calls a chat-completions endpoint only when `LLM_MODE=live` and `LLM_API_KEY` is set. | No key is configured. Intake and quote extraction use the deterministic parser. Tests and the demo do not call a model. |
 

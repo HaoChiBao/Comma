@@ -1,3 +1,5 @@
+import os
+
 import uvicorn
 
 from app.bootstrap import seed
@@ -9,7 +11,8 @@ def main() -> None:
     apply()
     if settings.seed_on_start:
         seed(reset=False, include_demo_task=settings.seed_demo_task)
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, factory=False)
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, factory=False)
 
 
 if __name__ == "__main__":

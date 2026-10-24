@@ -7,4 +7,4 @@ RUN npm install
 COPY apps/web /app
 RUN npm run build
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["sh", "-c", "npx next start -H 0.0.0.0 -p ${PORT:-3000}"]
