@@ -251,6 +251,7 @@ def _apply_business_effect(session: Session, item: Outbox) -> None:
     if item.kind == "email_po" and payload.get("po_id"):
         po = session.get(PurchaseOrder, uuid.UUID(payload["po_id"]))
         if po is not None and po.status in ("AUTHORIZED", "SENDING"):
+            previous = po.status
             po.status = "SENT"
             po.provider_ref = item.provider_ref
             record(
@@ -260,7 +261,7 @@ def _apply_business_effect(session: Session, item: Outbox) -> None:
                 actor_type="system_agent",
                 actor_id=None,
                 action="purchase_order_sent",
-                previous_state="AUTHORIZED",
+                previous_state=previous,
                 new_state="SENT",
                 reason="sandbox delivery accepted; this is not a supplier acknowledgement",
                 evidence_refs=[po.po_number, item.provider_ref or ""],

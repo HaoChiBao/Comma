@@ -214,6 +214,25 @@ def test_inbound_email_correlation_and_duplicate(client):
     duplicate = client.post("/webhooks/email", content=raw, headers=headers)
     assert duplicate.status_code == 200, duplicate.text
     assert duplicate.json()["deduped"] is True
+    session = SessionLocal()
+    try:
+        quote_count = session.scalar(
+            select(func.count()).select_from(SupplierQuote).where(SupplierQuote.task_id == uuid.UUID(created["task_id"]))
+        )
+    finally:
+        session.close()
+    replay = client.post("/webhooks/email", content=raw, headers=headers)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["deduped"] is True
+    session = SessionLocal()
+    try:
+        again = session.scalar(
+            select(func.count()).select_from(SupplierQuote).where(SupplierQuote.task_id == uuid.UUID(created["task_id"]))
+        )
+        assert again == quote_count
+        assert quote_count >= 1
+    finally:
+        session.close()
     subject_only = {
         "provider_message_id": "email-subject-only",
         "subject": f"RFQ-TOKEN: {rfq['correlation_token']}",
@@ -317,6 +336,12 @@ def test_quote_revision_invalidates_plan_and_replans_ram(client):
     assert detail["pending_approval"]["id"] != previous_approval
     old = next(row for row in detail["approvals"] if row["id"] == previous_approval)
     assert old["status"] == "invalidated"
+    old_plan = next(row for row in detail["plans"] if row["id"] == previous["id"])
+    assert old_plan["status"] == "invalidated"
+    assert any(
+        event["action"] == "plan_invalidated" and previous["id"] in event["evidence_refs"] and event["allowed"] is True
+        for event in detail["events"]
+    )
     ram_qty = sum(line["quantity"] for line in plan["lines"] if line["component_type"] == "ram")
     gpu_qty = sum(line["quantity"] for line in plan["lines"] if line["component_type"] == "gpu")
     assert ram_qty == 200
@@ -377,7 +402,16 @@ def test_approval_wrong_actor_expired_stale_and_over_limit(client):
         json={"decision": "approve"},
     )
     assert expired.status_code == 409, expired.text
-    assert _detail(client, token, created["task_id"])["orders"] == []
+    expired_detail = _detail(client, token, created["task_id"])
+    assert expired_detail["orders"] == []
+    assert any(
+        event["action"] == "approval_expired"
+        and event["allowed"] is False
+        and event["previous_state"] == "pending"
+        and event["new_state"] == "expired"
+        and event["evidence_refs"]
+        for event in expired_detail["events"]
+    )
 
     token, created, detail = _pending(client, message_id="stale-plan")
     approval_id = detail["pending_approval"]["id"]
@@ -398,6 +432,14 @@ def test_approval_wrong_actor_expired_stale_and_over_limit(client):
     detail = _detail(client, token, created["task_id"])
     assert detail["orders"] == []
     assert next(row["status"] for row in detail["approvals"] if row["id"] == approval_id) == "invalidated"
+    assert any(
+        event["action"] == "approval_stale_plan"
+        and event["allowed"] is False
+        and event["previous_state"] == "pending"
+        and event["new_state"] == "invalidated"
+        and event["evidence_refs"]
+        for event in detail["events"]
+    )
 
 
 def test_duplicate_approval_creates_one_po_per_supplier(client):

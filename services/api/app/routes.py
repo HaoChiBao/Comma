@@ -212,6 +212,13 @@ def task_rfqs(task_id: uuid.UUID, actor: Actor = Depends(current_actor), db: Ses
     return {"rfqs": task_detail(db, task)["rfqs"]}
 
 
+@router.post("/api/tasks/{task_id}/cancel")
+def cancel_task_route(task_id: uuid.UUID, actor: Actor = Depends(current_actor), db: Session = Depends(get_db)):
+    from app.pipeline import cancel_task
+
+    return cancel_task(db, actor, task_id)
+
+
 @router.post("/api/approvals/{approval_id}/respond")
 def respond_approval(
     approval_id: uuid.UUID,

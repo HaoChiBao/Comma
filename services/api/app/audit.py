@@ -22,6 +22,7 @@ def record(
     evidence_refs: list | None = None,
     allowed: bool,
 ) -> WorkEvent:
+    refs = [ref for ref in (evidence_refs or []) if ref is not None and ref != ""]
     event = WorkEvent(
         id=uuid.uuid4(),
         company_id=company_id,
@@ -33,7 +34,7 @@ def record(
         new_state=new_state,
         reason=reason,
         diff_json=diff or {},
-        evidence_refs_json=evidence_refs or [],
+        evidence_refs_json=refs,
         allowed=allowed,
         created_at=clock.now(),
     )

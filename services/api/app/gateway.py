@@ -41,16 +41,53 @@ def respond(
     try:
         actor = session.get(Actor, actor_id)
         if actor is None or not actor.active:
+            record(
+                session,
+                company_id=actor.company_id if actor else None,
+                task_id=None,
+                actor_type="unknown",
+                actor_id=actor.id if actor else None,
+                action="approval_denied",
+                previous_state=None,
+                new_state="denied",
+                reason="unknown actor",
+                evidence_refs=[str(approval_id)],
+                allowed=False,
+            )
+            session.commit()
             raise ApiError(401, "unauthorized", "unknown actor")
-        approval = session.scalar(select(Approval).where(Approval.id == approval_id).with_for_update())
-        if approval is None:
+        peeked = session.get(Approval, approval_id)
+        if peeked is None:
+            _deny_unscoped(session, actor, approval_id, "approval is not in this company")
+            session.commit()
             raise ApiError(404, "not_found", "not found")
-        task = session.get(ProcurementTask, approval.task_id)
-        plan = session.get(PurchasePlan, approval.plan_id)
+        peeked_task = session.get(ProcurementTask, peeked.task_id)
+        if peeked_task is None or peeked_task.company_id != actor.company_id:
+            _deny_unscoped(session, actor, approval_id, "approval is not in this company")
+            session.commit()
+            raise ApiError(404, "not_found", "not found")
+        session.expire(peeked)
+        if peeked_task is not None:
+            session.expire(peeked_task)
+        approval = session.scalar(
+            select(Approval)
+            .where(Approval.id == approval_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if approval is None:
+            _deny_unscoped(session, actor, approval_id, "approval is not in this company")
+            session.commit()
+            raise ApiError(404, "not_found", "not found")
+        task = session.get(ProcurementTask, approval.task_id, populate_existing=True)
+        plan = session.get(PurchasePlan, approval.plan_id, populate_existing=True)
         if task is None or task.company_id != actor.company_id:
+            _deny_unscoped(session, actor, approval_id, "approval is not in this company")
+            session.commit()
             raise ApiError(404, "not_found", "not found")
         if approval.status == "approved":
             orders = _orders_for_plan(session, plan.id)
+            _record_replay(session, actor, approval, orders)
             session.commit()
             return {"ok": True, "idempotent": True, "purchase_orders": [_po_dict(row) for row in orders], "task_id": str(task.id)}
         if approval.status != "pending":
@@ -68,13 +105,13 @@ def respond(
         if clock.now() > approval.expires_at:
             approval.status = "expired"
             approval.responded_at = clock.now()
-            _deny(session, task, actor, approval, "approval expired", message_id, action="approval_expired")
+            _deny(session, task, actor, approval, "approval expired", message_id, action="approval_expired", previous_state="pending")
             session.commit()
             raise ApiError(409, "approval_denied", "approval expired")
         if plan is None or plan.plan_hash != approval.plan_hash or plan.status != "proposed":
             approval.status = "invalidated"
             approval.responded_at = clock.now()
-            _deny(session, task, actor, approval, "plan hash or version is stale", message_id, action="approval_stale_plan")
+            _deny(session, task, actor, approval, "plan hash or version is stale", message_id, action="approval_stale_plan", previous_state="pending")
             session.commit()
             raise ApiError(409, "approval_denied", "plan hash or version is stale")
         amount = money(plan.total_landed_cost or 0)
@@ -108,8 +145,18 @@ def respond(
         raise
     except IntegrityError:
         session.rollback()
-        orders = _orders_for_plan(session, approval_id and _plan_id(session, approval_id))
-        return {"ok": True, "idempotent": True, "purchase_orders": [_po_dict(row) for row in orders], "task_id": None}
+        approval = session.get(Approval, approval_id)
+        actor = session.get(Actor, actor_id)
+        orders = _orders_for_plan(session, approval.plan_id if approval else None)
+        if approval is not None and actor is not None and orders:
+            _record_replay(session, actor, approval, orders)
+            session.commit()
+        return {
+            "ok": True,
+            "idempotent": True,
+            "purchase_orders": [_po_dict(row) for row in orders],
+            "task_id": str(approval.task_id) if approval else None,
+        }
     except Exception:
         session.rollback()
         raise
@@ -125,18 +172,47 @@ def respond(
     }
 
 
-def _plan_id(session: Session, approval_id: uuid.UUID):
-    approval = session.get(Approval, approval_id)
-    return approval.plan_id if approval else None
-
-
 def _orders_for_plan(session: Session, plan_id) -> list[PurchaseOrder]:
     if plan_id is None:
         return []
     return list(session.scalars(select(PurchaseOrder).where(PurchaseOrder.plan_id == plan_id)).all())
 
 
-def _deny(session, task, actor, approval, reason, message_id, action="approval_denied"):
+def _deny_unscoped(session, actor, approval_id, reason: str) -> None:
+    """Denied attempt that must not copy another tenant's task, plan, or status."""
+    record(
+        session,
+        company_id=actor.company_id,
+        task_id=None,
+        actor_type=actor.role,
+        actor_id=actor.id,
+        action="approval_denied",
+        previous_state=None,
+        new_state="denied",
+        reason=reason,
+        evidence_refs=[str(approval_id)],
+        allowed=False,
+    )
+
+
+def _record_replay(session, actor, approval, orders) -> None:
+    record(
+        session,
+        company_id=actor.company_id,
+        task_id=approval.task_id,
+        actor_type=actor.role,
+        actor_id=actor.id,
+        action="approval_replayed",
+        previous_state="approved",
+        new_state="approved",
+        reason="duplicate approval returned the existing purchase orders",
+        evidence_refs=[str(approval.id), *[row.po_number for row in orders]],
+        allowed=True,
+    )
+
+
+def _deny(session, task, actor, approval, reason, message_id, action="approval_denied", previous_state=None):
+    prior = approval.status if previous_state is None else previous_state
     record(
         session,
         company_id=task.company_id,
@@ -144,7 +220,7 @@ def _deny(session, task, actor, approval, reason, message_id, action="approval_d
         actor_type=actor.role,
         actor_id=actor.id,
         action=action,
-        previous_state=approval.status,
+        previous_state=prior,
         new_state=approval.status,
         reason=reason,
         evidence_refs=[str(approval.id), str(approval.plan_id), str(message_id) if message_id else None],

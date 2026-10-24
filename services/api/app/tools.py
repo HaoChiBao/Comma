@@ -71,8 +71,9 @@ def execute(session: Session, ctx: ToolContext, obs: dict, action: dict) -> dict
             actor_id=ctx.actor_id,
             action="tool_denied",
             previous_state=None,
-            new_state=None,
+            new_state="denied",
             reason=f"tool {name} is not permitted",
+            evidence_refs=[name],
             allowed=False,
         )
         raise PermissionError(name)
@@ -93,8 +94,9 @@ def _task(session, ctx, task_id):
             actor_id=ctx.actor_id,
             action="tool_denied",
             previous_state=None,
-            new_state=None,
+            new_state="denied",
             reason="task is outside the actor company",
+            evidence_refs=[str(task_id)],
             allowed=False,
         )
         raise PermissionError("cross-tenant task")
@@ -407,6 +409,19 @@ def propose_plan(session, ctx, payload):
         return {"proposed": {"id": str(existing.id), "version": existing.version, "hash": existing.plan_hash}}
     for prior in session.scalars(select(PurchasePlan).where(PurchasePlan.task_id == task.id, PurchasePlan.status == "proposed")).all():
         prior.status = "invalidated"
+        record(
+            session,
+            company_id=task.company_id,
+            task_id=task.id,
+            actor_type=ctx.actor_type,
+            actor_id=ctx.actor_id,
+            action="plan_invalidated",
+            previous_state="proposed",
+            new_state="invalidated",
+            reason="a new plan version replaced this plan",
+            evidence_refs=[str(prior.id), result.plan_hash or ""],
+            allowed=True,
+        )
         approval = session.scalar(select(Approval).where(Approval.plan_id == prior.id, Approval.status == "pending"))
         if approval is not None:
             approval.status = "invalidated"

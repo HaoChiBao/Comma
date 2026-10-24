@@ -36,15 +36,36 @@ P2 (voice, negotiation, supplier discovery, policy learning, CRM, ERP) is out of
 
 ## Verification
 
-Backend, from `services/api`, against `procurement_test`:
+Backend, from `services/api`, against `procurement_test` on 2026-10-24 after the audit fixes:
 
 ```bash
-DATABASE_URL=postgresql+psycopg://acme:acme@localhost:5432/procurement_test PYTHONPATH=. python -m pytest --tb=no --junitxml=/tmp/pytest-junit.xml -q
+cd /workspace/services/api
+DATABASE_URL=postgresql+psycopg://acme:acme@localhost:5432/procurement_test PYTHONPATH=. /tmp/procurement-venv/bin/python -m pytest --tb=line --junitxml=/tmp/pytest-junit.xml -q
 ```
 
-JUnit attributes from that run: `tests=37` `failures=0` `errors=0` `skipped=0` `time=19.319`. Exit code 0.
+Exit code 0. JUnit attributes: `tests=43` `failures=0` `errors=0` `skipped=0` `time=28.708`.
 
-Breakdown: `test_acceptance.py` 16, `test_extract_and_policy.py` 9, `test_optimizer.py` 7, `test_stress.py` 5.
+Breakdown: `test_acceptance.py` 16, `test_audit_trail.py` 6, `test_extract_and_policy.py` 9, `test_optimizer.py` 7, `test_stress.py` 5.
+
+Audit checks covered by that run:
+
+- Invalid transitions raise and leave the task status unchanged. The denial is a new `work_events` row with actor, timestamp, previous state, new state, reason, and evidence. A second denial appends another row.
+- `GET /api/tasks/{id}/events` matches the stored rows, including a requester approval denial.
+- Cancelling a task is audited. A later approval creates no purchase order. A requester who did not create the task is denied and the status stays put.
+- Expired and stale approvals record previous state `pending` and the resulting `expired` or `invalidated` state.
+- A 50-stick RAM cut invalidates the previous plan and its approval. The new plan still covers 200 RAM sticks and 100 GPUs.
+- Webhook redelivery of the same supplier email does not increase the quote count.
+- A duplicate approval writes `approval_replayed` and does not add a purchase order. Concurrent manager and controller approvals still create one PO per supplier.
+- A purchase order moving `SENDING` to `SENT` records `SENDING` as the previous state.
+- Tenant B approving or cancelling tenant A's task returns 404, leaves A's task and orders unchanged, and writes the denial on B's company with no task id and without A's public code.
+- Demo mutation routes return 404 when `APP_ENV=production` and when `DEMO_MODE` is false. `/health` still returns 200.
+
+Remaining holes:
+
+- Denials with no task state to show (unknown phone, forbidden tool, cross-tenant id) store `previous_state` null and `new_state` `denied`. They do not copy another tenant's status into the caller's audit row.
+- The append-only trigger blocks `UPDATE` and `DELETE` of `work_events`. `TRUNCATE`, which demo reset uses, is not blocked by that row trigger.
+- `EMAIL_MODE=smtp` has no provider reconcile, so a live SMTP retry cannot prove the first send. The default sandbox path reconciles an ambiguous send before retry. That path is `test_ambiguous_outbound_is_reconciled_without_a_second_send`.
+- The Playwright demo was not re-run in this audit pass. The earlier result remains `1 passed (8.5s)`.
 
 Browser demo, API already on port 8000, from `apps/web`:
 

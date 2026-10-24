@@ -115,7 +115,7 @@ def handle_inbound_text(session: Session, inbound: InboundMessage) -> dict:
                 actor_id=actor.id,
                 action="unsupported_message",
                 previous_state=None,
-                new_state=None,
+                new_state="denied",
                 reason=f"content type {inbound.content_type} is not text",
                 evidence_refs=[str(message.id)],
                 allowed=False,
@@ -202,7 +202,31 @@ def handle_supplier_reply(session: Session, *, provider_message_id: str, body: s
             received_at=clock.now(),
         )
         session.add(message)
-        session.flush()
+        try:
+            with session.begin_nested():
+                session.flush()
+        except IntegrityError:
+            session.rollback()
+            existing = session.scalar(
+                select(Message).where(Message.provider == "email", Message.provider_message_id == provider_message_id)
+            )
+            if existing is None:
+                raise
+            record(
+                session,
+                company_id=existing.company_id,
+                task_id=existing.task_id,
+                actor_type="system_agent",
+                actor_id=None,
+                action="email_duplicate_ignored",
+                previous_state=None,
+                new_state=None,
+                reason="duplicate supplier email id",
+                evidence_refs=[provider_message_id, str(existing.id)],
+                allowed=True,
+            )
+            session.commit()
+            return {"deduped": True, "message_id": str(existing.id), "task_id": str(existing.task_id) if existing.task_id else None}
         if rfq is None or task is None:
             record(
                 session,
@@ -212,7 +236,7 @@ def handle_supplier_reply(session: Session, *, provider_message_id: str, body: s
                 actor_id=None,
                 action="email_uncorrelated",
                 previous_state=None,
-                new_state=None,
+                new_state="denied",
                 reason="body did not contain a known RFQ-TOKEN; subject is not authoritative",
                 evidence_refs=[str(message.id), subject],
                 allowed=False,
@@ -327,6 +351,7 @@ def disrupt_ram(session: Session, task: ProcurementTask, reduce_by: int = 50) ->
             previous_state=task.status,
             new_state=task.status,
             reason="RAM disruption ignored for ordering because purchase orders already exist",
+            evidence_refs=[str(task.id)],
             allowed=False,
         )
         session.commit()
@@ -629,7 +654,7 @@ def _unauthorized(session, message: Message, inbound: InboundMessage) -> None:
         actor_id=None,
         action="unauthorized_sender",
         previous_state=None,
-        new_state=None,
+        new_state="denied",
         reason="sender phone is not an active actor",
         evidence_refs=[str(message.id), inbound.sender],
         allowed=False,
@@ -686,7 +711,7 @@ def _route_approval(session, actor: Actor, message: Message, text: str, decision
                     actor_id=actor.id,
                     action="approval_denied",
                     previous_state=None,
-                    new_state=None,
+                    new_state="denied",
                     reason="approval token is not in this company",
                     evidence_refs=[str(message.id)],
                     allowed=False,
@@ -710,7 +735,7 @@ def _route_approval(session, actor: Actor, message: Message, text: str, decision
                 actor_id=actor.id,
                 action="approval_denied",
                 previous_state=None,
-                new_state=None,
+                new_state="denied",
                 reason="unscoped decision while multiple approvals are open",
                 evidence_refs=[str(message.id)],
                 allowed=False,
@@ -952,6 +977,65 @@ def _next_code(session, prefix: str) -> str:
             except ValueError:
                 continue
     return f"{prefix}-{max(numbers, default=1000) + 1}"
+
+
+def cancel_task(session: Session, actor: Actor, task_id: uuid.UUID) -> dict:
+    """Audited cancellation. A cancelled task cannot pass the approval gateway."""
+    from app.errors import ApiError
+    from app.state import InvalidTransition
+
+    task = session.get(ProcurementTask, task_id)
+    if task is None or task.company_id != actor.company_id:
+        record(
+            session,
+            company_id=actor.company_id,
+            task_id=None,
+            actor_type=actor.role,
+            actor_id=actor.id,
+            action="cancel_denied",
+            previous_state=None,
+            new_state="denied",
+            reason="task is not in this company",
+            evidence_refs=[str(task_id)],
+            allowed=False,
+        )
+        session.commit()
+        raise ApiError(404, "not_found", "not found")
+    allowed_actor = actor.role in ("procurement_manager", "controller") or (
+        actor.role == "requester" and task.created_by == actor.id
+    )
+    if not allowed_actor:
+        record(
+            session,
+            company_id=task.company_id,
+            task_id=task.id,
+            actor_type=actor.role,
+            actor_id=actor.id,
+            action="cancel_denied",
+            previous_state=task.status,
+            new_state=task.status,
+            reason="actor is not allowed to cancel this task",
+            evidence_refs=[str(task.id), str(actor.id)],
+            allowed=False,
+        )
+        session.commit()
+        raise ApiError(403, "cancel_denied", "actor is not allowed to cancel this task")
+    try:
+        transition(
+            session,
+            task,
+            "CANCELLED",
+            actor_type=actor.role,
+            actor_id=actor.id,
+            reason="requester or approver cancelled the task before purchase orders",
+            evidence_refs=[str(actor.id)],
+            action="task_cancelled",
+        )
+    except InvalidTransition as exc:
+        session.commit()
+        raise ApiError(409, "invalid_transition", str(exc)) from exc
+    session.commit()
+    return {"ok": True, "task_id": str(task.id), "status": task.status}
 
 
 def demo_seed_message() -> InboundMessage:

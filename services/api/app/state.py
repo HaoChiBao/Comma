@@ -46,6 +46,9 @@ def transition(
     previous = task.status
     if new_status == previous:
         return
+    refs = [ref for ref in (evidence_refs or []) if ref]
+    if not refs:
+        refs = [str(task.id)]
     if new_status not in TRANSITIONS.get(previous, set()):
         record(
             session,
@@ -58,7 +61,7 @@ def transition(
             new_state=new_status,
             reason=reason or f"invalid transition {previous} -> {new_status}",
             diff={"status": {"from": previous, "to": new_status}},
-            evidence_refs=evidence_refs,
+            evidence_refs=refs,
             allowed=False,
         )
         raise InvalidTransition(previous, new_status)
@@ -79,7 +82,7 @@ def transition(
             previous_state=previous,
             new_state=new_status,
             reason="concurrent modification",
-            evidence_refs=evidence_refs,
+            evidence_refs=refs,
             allowed=False,
         )
         raise ConcurrentModification(str(task.id))
@@ -97,6 +100,6 @@ def transition(
         new_state=new_status,
         reason=reason,
         diff=diff or {"status": {"from": previous, "to": new_status}},
-        evidence_refs=evidence_refs,
+        evidence_refs=refs,
         allowed=True,
     )
