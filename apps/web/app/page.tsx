@@ -104,6 +104,7 @@ export default function HomePage() {
     return (
       <main className="card" style={{ maxWidth: 460 }}>
         <h1>Acme procurement</h1>
+        <p>Text a request. Get a costed plan. Approve it from iMessage.</p>
         <p className="muted">Sign in with an enrolled phone. Maya Chen is +15555550100.</p>
         <form onSubmit={login} className="grid">
           <label>
