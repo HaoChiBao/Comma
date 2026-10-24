@@ -1,0 +1,74 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: acme
+      POSTGRES_PASSWORD: acme
+      POSTGRES_DB: procurement
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acme -d procurement"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://acme:acme@db:5432/procurement
+      APP_ENV: development
+      DEMO_MODE: "true"
+      DEMO_CLOCK: "2026-10-24T15:00:00+00:00"
+      SESSION_SECRET: dev-only-change-me
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      PHOTON_MODE: mock
+      PHOTON_WEBHOOK_SECRET: dev-webhook-secret
+      PHOTON_SENDER_ID: "+15555551000"
+      EMAIL_MODE: sandbox
+      EMAIL_WEBHOOK_SECRET: dev-email-secret
+      LLM_MODE: deterministic
+      LLM_API_KEY: ""
+      EAGER_WORKER: "true"
+      WORKER_THREAD: "false"
+      SEED_ON_START: "true"
+      SEED_DEMO_TASK: "true"
+      MANAGER_APPROVAL_LIMIT: "200000.00"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.worker_main"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://acme:acme@db:5432/procurement
+      APP_ENV: development
+      DEMO_MODE: "true"
+      DEMO_CLOCK: "2026-10-24T15:00:00+00:00"
+      PHOTON_MODE: mock
+      EMAIL_MODE: sandbox
+      LLM_MODE: deterministic
+      LLM_API_KEY: ""
+      EAGER_WORKER: "false"
+      SEED_ON_START: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
