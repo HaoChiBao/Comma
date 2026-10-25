@@ -680,13 +680,19 @@ export function RadialWebGraph({
         }
       }}
       onPointerMove={(e) => {
-        if (isPanning.current) {
-          const dx = e.clientX - isPanning.current.startX;
-          const dy = e.clientY - isPanning.current.startY;
-          setCamera((c) => ({ ...c, x: isPanning.current!.camX + dx, y: isPanning.current!.camY + dy }));
+        const pan = isPanning.current;
+        if (pan) {
+          const dx = e.clientX - pan.startX;
+          const dy = e.clientY - pan.startY;
+          const targetX = pan.camX + dx;
+          const targetY = pan.camY + dy;
+          setCamera((c) => ({ ...c, x: targetX, y: targetY }));
         }
       }}
       onPointerUp={() => {
+        isPanning.current = null;
+      }}
+      onPointerCancel={() => {
         isPanning.current = null;
       }}
       onWheel={(e) => {
