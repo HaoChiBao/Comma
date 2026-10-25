@@ -14,10 +14,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <header className="top">
             <div>
               <div className="eyebrow">WorldState</div>
-              <h1>Historical evidence, not hindsight</h1>
+              <h1>What was knowable at the time</h1>
             </div>
             <nav className="row">
-              <a href="/">Cases</a>
+              <a href="/">Graph</a>
               <a href="/ingest">Ingest</a>
             </nav>
           </header>

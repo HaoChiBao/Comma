@@ -14,7 +14,7 @@ def configure(database_url: str) -> None:
     global _engine, _Session
     kwargs = {}
     if database_url.startswith("sqlite"):
-        kwargs["connect_args"] = {"check_same_thread": False}
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
         if database_url.endswith(":memory:"):
             kwargs["poolclass"] = StaticPool
     elif database_url.startswith("postgres"):

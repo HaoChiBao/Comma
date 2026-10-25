@@ -20,6 +20,30 @@ def client():
     return TestClient(app), app
 
 
+def test_parser_reads_decagon_document_ids_and_received_dates():
+    po = parse_document(
+        "DECAGON\nPURCHASE ORDER\nPURCHASE ORDER PO-C01-1123\nSupplier\nMock Inference Cloud\nAuthorized amount USD\n145.00\n",
+        utc("2025-09-30T00:00:00+00:00"),
+    )
+    assert po[0]["external_id"] == "PO-C01-1123"
+    assert str(po[0]["amount"]) == "145.00"
+    assert po[0]["kind"] == "purchase_order"
+    invoice = parse_document(
+        "INVOICE\nVENDOR INVOICE INV-C01-381\nVendor\nMock Inference Cloud\nInvoice date\n2025-09-28\nReceived by AP\n2025-12-10T10:00:00Z\nInvoice total USD\n158.00\n",
+        utc("2025-09-30T00:00:00+00:00"),
+    )
+    assert invoice[0]["external_id"] == "INV-C01-381"
+    assert str(invoice[0]["amount"]) == "158.00"
+    assert invoice[0]["available_from"].isoformat().startswith("2025-12-10")
+    email = parse_document(
+        "From: accounting@vend-001.example\nSubject: revised estimate\nMessage-ID: <MSG-0001@synthetic-mail.example>\n\nFor PO-C01-1123, our estimate is USD 160.00.\n",
+        utc("2025-09-30T00:00:00+00:00"),
+    )
+    assert email[0]["kind"] == "email"
+    assert email[0]["external_id"] == "MSG-0001"
+    assert str(email[0]["amount"]) == "160.00"
+
+
 def test_parser_keeps_every_printed_amount():
     records = parse_document(
         "Invoice INV-9\nVendor: Northwind Hosting\nDate: 2025-09-01\nTotal $10.00\nA separate filing fee of $2.50 applies.\n",

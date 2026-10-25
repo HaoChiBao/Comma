@@ -7,15 +7,16 @@ from decimal import Decimal
 
 from app.temporal import utc
 
-ID_RE = re.compile(r"\b((?:PO|INV|JE|EM|POL|CT)-[A-Z0-9]{2,})\b", re.I)
+ID_RE = re.compile(r"\b((?:PO|INV|JE|EM|POL|CT|MSG|CTR|AMD|SVC|ACR)-[A-Z0-9]+(?:-[A-Z0-9]+)*)\b", re.I)
 MONEY_RE = re.compile(
     r"(?:(?:USD\s*)?\$\s*(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2}))"
-    r"|(?:\b(?:amount|total|accrual|price|estimate|balance)\b[^0-9$\n]{0,24}(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2}))",
+    r"|(?:\b(?:authorized\s+amount|invoice\s+total|amount|total|accrual|price|estimate|balance)\b(?:[^0-9$]|\n){0,48}(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2}))"
+    r"|(?:\bUSD\b(?:[^0-9$]|\n){0,16}(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2}))",
     re.I,
 )
 ISO_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
 RECEIVED_RE = re.compile(
-    r"\b(?:received|available(?:\s+from)?|accessible|first accessible)\b[^0-9]{0,40}(20\d{2}-\d{2}-\d{2})",
+    r"\b(?:received(?:\s+by\s+[A-Za-z]+)?|available(?:\s+from)?|accessible|first accessible)\b(?:[^0-9]|\n){0,48}(20\d{2}-\d{2}-\d{2})",
     re.I,
 )
 VENDOR_RE = re.compile(r"\b(?:vendor|supplier|payee|from)\b[:\s]+([A-Za-z][\w&.,' -]{2,80})", re.I)
@@ -25,12 +26,31 @@ QTY_RE = re.compile(r"\b(?:quantity|qty)\b[^0-9\n]{0,12}(\d+(?:\.\d+)?)", re.I)
 
 def extract_text(filename: str, media_type: str, payload: bytes) -> str:
     name = filename.lower()
+    if name.endswith(".eml") or media_type == "message/rfc822":
+        return _email_text(payload)
     if name.endswith(".pdf") or media_type == "application/pdf":
         from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(payload))
         return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
     return payload.decode("utf-8", errors="replace").strip()
+
+
+def _email_text(payload: bytes) -> str:
+    import email
+    from email import policy
+
+    message = email.message_from_bytes(payload, policy=policy.default)
+    body = message.get_content() if not message.is_multipart() else ""
+    if message.is_multipart():
+        for part in message.walk():
+            if part.get_content_type() == "text/plain":
+                body += part.get_content() or ""
+    headers = []
+    for key in ("From", "To", "Subject", "Date", "Message-ID"):
+        if message[key]:
+            headers.append(f"{key}: {message[key]}")
+    return "\n".join(headers + ["", body]).strip()
 
 
 def parse_document(text: str, fallback_available: datetime) -> list[dict]:
@@ -48,6 +68,11 @@ def parse_document(text: str, fallback_available: datetime) -> list[dict]:
             return [_from_mapping(item, fallback_available, text) for item in parsed]
     if _looks_like_csv(stripped):
         return [_from_mapping(row, fallback_available, "\n".join(f"{key}: {value}" for key, value in row.items())) for row in _csv_rows(stripped)]
+    if _kind(stripped) == "email":
+        record = _from_text(stripped, fallback_available)
+        records = [record]
+        _fill_missing_amounts(records, stripped)
+        return records
     chunks = _chunks(stripped)
     records = []
     carried = ""
@@ -177,24 +202,26 @@ def _decimal(value: str) -> Decimal:
 
 
 def _kind(text: str) -> str:
-    first = text.strip().splitlines()[0].lower()
-    if first.startswith("invoice"):
-        return "invoice"
-    if first.startswith("purchase order") or first.startswith("po-"):
-        return "purchase_order"
-    if first.startswith("journal") or first.startswith("accrual"):
-        return "journal"
-    if first.startswith("policy"):
-        return "policy"
-    if first.startswith("from:") or "subject:" in text.lower()[:500]:
+    head = "\n".join(text.splitlines()[:16]).lower()
+    if re.search(r"(?m)^(from|subject):", head):
         return "email"
-    lowered = text.lower()
-    if "invoice" in lowered:
-        return "invoice"
-    if "journal" in lowered or "accrual" in lowered:
-        return "journal"
-    if "purchase order" in lowered:
+    for line in head.splitlines():
+        if line.startswith("purchase order") or line.startswith("po "):
+            return "purchase_order"
+        if line.startswith("invoice") or line.startswith("vendor invoice"):
+            return "invoice"
+        if line.startswith("journal") or line.startswith("accrual"):
+            return "journal"
+        if line.startswith("policy"):
+            return "policy"
+        if "amendment" in line or line.startswith("contract") or line.startswith("master services"):
+            return "contract"
+    if re.search(r"\bpurchase order\b", text, re.I):
         return "purchase_order"
+    if re.search(r"\binvoice\b", text, re.I):
+        return "invoice"
+    if re.search(r"\b(journal|accrual)\b", text, re.I):
+        return "journal"
     return "memo"
 
 
@@ -206,23 +233,30 @@ def _canonical_kind(value: str) -> str:
 
 def _primary_id(identifiers: list[str], kind: str) -> str:
     prefixes = {
-        "invoice": "INV-",
-        "purchase_order": "PO-",
-        "journal": "JE-",
-        "email": "EM-",
-        "policy": "POL-",
+        "invoice": ("INV-",),
+        "purchase_order": ("PO-",),
+        "journal": ("JE-", "ACR-"),
+        "email": ("MSG-", "EM-"),
+        "policy": ("POL-",),
+        "contract": ("CTR-", "AMD-"),
     }
-    wanted = prefixes.get(kind)
-    if wanted:
+    wanted = prefixes.get(kind, ())
+    for prefix in wanted:
         for identifier in identifiers:
-            if identifier.startswith(wanted):
+            if identifier.startswith(prefix):
                 return identifier
     return identifiers[0] if identifiers else ""
 
 
 def _normalize_id(value: str) -> str:
-    compact = re.sub(r"\s+", "", value.upper())
-    return re.sub(r"^(PO|INV|JE|EM|POL|CT)(?!-)", r"\1-", compact)
+    compact = re.sub(r"\s+", "", value.strip())
+    match = re.match(r"([A-Za-z]+)([\s-]?)(.*)", compact)
+    if not match:
+        return compact.upper()
+    rest = match.group(3)
+    if match.group(2) == "":
+        rest = "-" + rest
+    return f"{match.group(1).upper()}-{rest.lstrip('-')}" if rest else match.group(1).upper()
 
 
 def _slug(value: str) -> str:

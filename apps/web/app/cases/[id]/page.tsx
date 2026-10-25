@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { EvidenceGraph } from "@/components/EvidenceGraph";
-import { api, type CaseRow, type GraphEdge, type GraphNode } from "@/lib/api";
+import { api, type ActorRow, type CaseRow, type GraphEdge, type GraphNode } from "@/lib/api";
 
-const ACTORS = [
+const FALLBACK_ACTORS: ActorRow[] = [
   { id: "actor-maya", name: "Maya Chen", role: "accountant" },
   { id: "actor-jordan", name: "Jordan Hale", role: "auditor" },
 ];
@@ -14,6 +14,7 @@ export default function CasePage() {
   const params = useParams<{ id: string }>();
   const caseId = params.id;
   const [item, setItem] = useState<CaseRow | null>(null);
+  const [actors, setActors] = useState<ActorRow[]>(FALLBACK_ACTORS);
   const [actorId, setActorId] = useState("actor-maya");
   const [mode, setMode] = useState("audit");
   const [day, setDay] = useState("2025-09-30");
@@ -26,11 +27,20 @@ export default function CasePage() {
   const [documentText, setDocumentText] = useState("");
 
   useEffect(() => {
-    api<CaseRow>(`/api/v1/cases/${caseId}`).then(setItem).catch((reason: Error) => setError(reason.message));
+    api<CaseRow>(`/api/v1/cases/${caseId}`)
+      .then(async (row) => {
+        setItem(row);
+        const people = await api<ActorRow[]>("/api/v1/actors");
+        const matched = people.filter((person) => person.organization_id === row.organization_id);
+        const next = matched.length ? matched : FALLBACK_ACTORS;
+        setActors(next);
+        setActorId((current) => (next.some((person) => person.id === current) ? current : next[0].id));
+      })
+      .catch((reason: Error) => setError(reason.message));
   }, [caseId]);
 
   useEffect(() => {
-    const actor = ACTORS.find((person) => person.id === actorId);
+    const actor = actors.find((person) => person.id === actorId);
     const view = actor?.role === "auditor" ? "auditor" : "agent";
     api<{ id: string; manifest_hash: string }>("/api/v1/snapshots", {
       method: "POST",
@@ -49,6 +59,7 @@ export default function CasePage() {
   }, [caseId, actorId, mode, day]);
 
   const current = nodes.find((node) => node.id === selected) || null;
+  const actor = actors.find((person) => person.id === actorId);
 
   useEffect(() => {
     if (!current || current.redacted || !snapshotId) {
@@ -81,7 +92,7 @@ export default function CasePage() {
         <label>
           Role{" "}
           <select aria-label="Actor" value={actorId} onChange={(event) => setActorId(event.target.value)}>
-            {ACTORS.map((person) => (
+            {actors.map((person) => (
               <option key={person.id} value={person.id}>{person.name} · {person.role}</option>
             ))}
           </select>
@@ -95,7 +106,7 @@ export default function CasePage() {
         </label>
       </div>
       {mode === "pre_decision" ? <p className="warn">Pre-decision mode hides the recorded accrual from the agent.</p> : null}
-      {actorId === "actor-jordan" ? <p className="warn">Auditor view can show that later evidence exists. It does not reveal the hidden amount.</p> : <p className="muted">Agent view shows only what this snapshot allows.</p>}
+      {actor?.role === "auditor" ? <p className="warn">Auditor view can show that later evidence exists. It does not reveal the hidden amount.</p> : <p className="muted">Agent view shows only what this snapshot allows.</p>}
       {error ? <p className="bad">{error}</p> : null}
       <div className="layout">
         <EvidenceGraph nodes={nodes} edges={edges} selected={selected} onSelect={setSelected} />

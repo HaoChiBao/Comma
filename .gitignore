@@ -13,5 +13,6 @@ playwright-report/
 test-results/
 .DS_Store
 services/api/.venv/
+.tmp-decagon/
 worldstate.db
 services/api/worldstate.db

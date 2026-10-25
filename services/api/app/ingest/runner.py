@@ -364,3 +364,7 @@ _HANDLERS = {
     "cases": _cases,
     "reconcile": _reconcile,
 }
+
+from app.ingest.decagon import HANDLERS as DECAGON_HANDLERS
+
+_HANDLERS.update(DECAGON_HANDLERS)

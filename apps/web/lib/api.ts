@@ -8,6 +8,24 @@ export type CaseRow = {
   decision_at: string;
   recorded_amount: string;
   status: string;
+  organization_id?: string;
+};
+
+export type ActorRow = { id: string; name: string; role: string; organization_id?: string };
+
+export type CompanyNode = GraphNode & { group: string; case_id: string; text: string };
+
+export type CompanyGraph = {
+  as_of: string;
+  mode: string;
+  view: string;
+  actor: ActorRow;
+  actors: ActorRow[];
+  nodes: CompanyNode[];
+  edges: GraphEdge[];
+  cases: { id: string; title: string; vendor: string; finding: string }[];
+  corpus: { documents: number; on_graph: number };
+  run: { id: string; status: string; error: string; completed: number; total: number; label: string } | null;
 };
 
 export type GraphNode = {
@@ -22,6 +40,9 @@ export type GraphNode = {
   document_date: string | null;
   redacted: boolean;
   reason?: string;
+  group?: string;
+  case_id?: string;
+  text?: string;
 };
 
 export type GraphEdge = {

@@ -15,6 +15,18 @@ def ingest_sample(available_from: str = "2025-09-30", organization_id: str = "or
     return job_payload(db, job)
 
 
+@router.post("/ingestions/decagon")
+def ingest_decagon(db: Session = Depends(db_session)):
+    from app.ingest.decagon import start_decagon
+
+    try:
+        job = start_decagon(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.refresh(job)
+    return job_payload(db, job)
+
+
 @router.post("/ingestions")
 async def ingest_files(
     available_from: str = Form(...),

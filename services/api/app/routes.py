@@ -57,6 +57,23 @@ def list_actors(db: Session = Depends(db_session)):
     return [{"id": actor.id, "name": actor.name, "role": actor.role, "organization_id": actor.organization_id} for actor in actors]
 
 
+@router.get("/company-graph")
+def company_graph_route(
+    organization_id: str = "org-decagon",
+    actor_id: str = "actor-decagon-finance",
+    as_of: str = "2025-12-15T12:00:00+00:00",
+    mode: str = "audit",
+    view: str = "",
+    db: Session = Depends(db_session),
+):
+    from app.company_graph import company_graph
+    from app.ingest.decagon import ensure_company
+
+    if organization_id == "org-decagon":
+        ensure_company(db)
+    return company_graph(db, organization_id, actor_id, utc(as_of), mode, view or None)
+
+
 @router.get("/cases")
 def list_cases(db: Session = Depends(db_session)):
     cases = db.scalars(select(Case).order_by(Case.id)).all()
