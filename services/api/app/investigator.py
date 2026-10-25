@@ -87,10 +87,17 @@ def run_investigation(db: Session, snapshot_id: str) -> Investigation:
     if finding == "INSUFFICIENT_EVIDENCE":
         missing.append("No preserved source explains the recorded amount.")
     uncertainties = ["Cannot prove which source a person actually used."]
-    if outcome and outcome["kind"] == "journal":
-        uncertainties.append("The recorded accrual has no preserved formula, so its origin is unexplained.")
     amount_text = ", ".join(f"{item['citation_label']} {item['amount']}" for item in observations) or "no amounts"
-    relationships = find_relationships(load_records(db, readable))
+    readable_records = load_records(db, readable)
+    relationships = find_relationships(readable_records)
+    if outcome and outcome["kind"] == "journal":
+        origin = _origin_sentence(relationships, outcome["citation_label"])
+        if origin:
+            uncertainties.append(origin)
+        else:
+            uncertainties.append("No earlier visible amount or sum equals the recorded cost, so its origin is unexplained.")
+    if any(record["kind"] == "invoice" and not any(str(ref).startswith("PO-") for ref in record.get("references") or []) for record in readable_records):
+        missing.append("An invoice does not name a purchase order.")
     summary = f"Using only the snapshot, the visible amounts are {amount_text}."
     if outcome and finding == "QUESTIONABLE":
         summary = f"The recorded {outcome['amount']} differs from other amounts visible in this snapshot."
@@ -137,6 +144,20 @@ def run_investigation(db: Session, snapshot_id: str) -> Investigation:
     db.commit()
     db.refresh(investigation)
     return investigation
+
+
+def _origin_sentence(relationships: list[dict], label: str) -> str:
+    involved = [item for item in relationships if label in {item["source_label"], item["target_label"]} and item["type"] in {"SOURCE_CANDIDATE", "DERIVED_FROM", "AMBIGUOUS"}]
+    derived = [item for item in involved if item["type"] == "DERIVED_FROM"]
+    if derived:
+        return derived[0]["explanation"]
+    sources = [item for item in involved if item["type"] == "SOURCE_CANDIDATE"]
+    if len(sources) == 1:
+        return sources[0]["explanation"]
+    ambiguous = [item for item in involved if item["type"] == "AMBIGUOUS"]
+    if ambiguous:
+        return ambiguous[0]["explanation"]
+    return ""
 
 
 def unsafe_baseline(db: Session, *, case_id: str, actor_id: str, as_of: datetime, mode: str) -> dict:

@@ -109,6 +109,8 @@ export default function HomePage() {
           <span><i className="swatch reconciles" /> Reconciles</span>
           <span><i className="swatch contradicts" /> Contradicts</span>
           <span><i className="swatch governs" /> Governs</span>
+          <span><i className="swatch supports" /> Possible source</span>
+          <span><i className="swatch governs" /> Ambiguous</span>
         </div>
       </section>
       <aside className="panel inspector">

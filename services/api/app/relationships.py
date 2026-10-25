@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.ingest.parse import ID_RE, _normalize_id
 from app.models import IngestRecord
-from app.temporal import interval_contains
+from app.temporal import aware, interval_contains
 
 _TRANSACTION = {"PO", "INV", "JE", "EM", "MSG", "CTR", "AMD", "SVC", "ACR"}
 
@@ -66,12 +66,15 @@ def find_relationships(records: list[dict]) -> list[dict]:
         if key:
             same_record.setdefault(key, {})[record["external_id"]] = record
     for members in same_record.values():
+        group = list(members.values())
         _amount_pairs(
-            list(members.values()),
+            group,
             add,
             "These documents refer to the same record and the amounts differ.",
             "These documents refer to the same record and the amounts match.",
         )
+        _infer_origins(group, add)
+        _ambiguous_peers(group, add)
 
     cases: dict[str, dict[str, dict]] = {}
     for record in records:
@@ -93,6 +96,8 @@ def find_relationships(records: list[dict]) -> list[dict]:
                         inferred=False,
                         confidence="high",
                     )
+        _infer_origins(group, add)
+        _ambiguous_peers(group, add)
     return found
 
 
@@ -154,6 +159,90 @@ def _amount_pairs(members: list[dict], add, differ: str, match: str) -> None:
                 add(left, right, "RECONCILES_WITH", match, inferred=False, confidence="high")
             else:
                 add(left, right, "CONTRADICTS", differ)
+
+
+def _infer_origins(members: list[dict], add) -> None:
+    priced = [item for item in members if item.get("amount") is not None and item.get("available_from") is not None]
+    for cost in priced:
+        priors = [item for item in priced if item["external_id"] != cost["external_id"] and _related(cost, item) and _at_or_before(item, cost)]
+        exact = [item for item in priors if item["amount"] == cost["amount"]]
+        sums = []
+        for index, left in enumerate(priors):
+            for right in priors[index + 1 :]:
+                if left["amount"] + right["amount"] == cost["amount"]:
+                    sums.append((left, right, "plus"))
+                elif left["amount"] - right["amount"] == cost["amount"]:
+                    sums.append((left, right, "minus"))
+                elif right["amount"] - left["amount"] == cost["amount"]:
+                    sums.append((right, left, "minus"))
+        if len(exact) == 1 and not sums:
+            prior = exact[0]
+            add(
+                prior,
+                cost,
+                "SOURCE_CANDIDATE",
+                f"{cost['external_id']} matches {prior['external_id']}, which was already available. That does not prove it was the source.",
+            )
+        elif exact or len(sums) > 1:
+            choices = [item["external_id"] for item in exact]
+            for left, right, how in sums:
+                if how == "plus":
+                    choices.append(f"{left['external_id']} plus {right['external_id']}")
+                else:
+                    choices.append(f"{left['external_id']} minus {right['external_id']}")
+            text = f"{cost['external_id']} has more than one possible source: {'; '.join(choices)}. The source is ambiguous."
+            involved = list(exact)
+            for left, right, _how in sums:
+                involved.extend([left, right])
+            seen_ids = set()
+            for item in involved:
+                if item["external_id"] in seen_ids:
+                    continue
+                seen_ids.add(item["external_id"])
+                add(item, cost, "AMBIGUOUS", text)
+        elif len(sums) == 1:
+            left, right, how = sums[0]
+            if how == "plus":
+                text = f"{cost['external_id']} equals {left['external_id']} plus {right['external_id']}. No formula in the text says they were added."
+            else:
+                text = f"{cost['external_id']} equals {left['external_id']} minus {right['external_id']}. No formula in the text says that."
+            add(left, cost, "DERIVED_FROM", text)
+            add(right, cost, "DERIVED_FROM", text)
+
+
+def _ambiguous_peers(members: list[dict], add) -> None:
+    by_kind: dict[str, list[dict]] = {}
+    for item in members:
+        if item.get("amount") is None:
+            continue
+        by_kind.setdefault(item["kind"], []).append(item)
+    for kind, group in by_kind.items():
+        if kind not in {"email", "journal", "invoice", "purchase_order", "contract"} or len(group) < 2:
+            continue
+        for index, left in enumerate(group):
+            for right in group[index + 1 :]:
+                if left.get("entity_ref") != right.get("entity_ref") or not left.get("entity_ref"):
+                    continue
+                if left["amount"] == right["amount"]:
+                    continue
+                if right["external_id"] in (left.get("references") or []) or left["external_id"] in (right.get("references") or []):
+                    continue
+                add(
+                    left,
+                    right,
+                    "AMBIGUOUS",
+                    "These documents are the same kind and neither names the other. Which one a cost used is ambiguous.",
+                )
+
+
+def _related(cost: dict, other: dict) -> bool:
+    if cost.get("entity_ref") and cost.get("entity_ref") == other.get("entity_ref"):
+        return True
+    return other["external_id"] in (cost.get("references") or []) or cost["external_id"] in (other.get("references") or [])
+
+
+def _at_or_before(prior: dict, cost: dict) -> bool:
+    return aware(prior["available_from"]) <= aware(cost["available_from"])
 
 
 def _is_transaction(external_id: str) -> bool:

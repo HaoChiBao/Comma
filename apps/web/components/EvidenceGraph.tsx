@@ -110,8 +110,8 @@ export function EvidenceGraph({
 function edgeColor(type: string) {
   if (type === "CONTRADICTS") return "#e07a72";
   if (type === "RECONCILES_WITH" || type === "CORRECTS") return "#8dcea0";
-  if (type === "POTENTIALLY_SUPPORTS" || type === "DERIVED_FROM" || type === "MENTIONS") return "#7fd3ff";
-  if (type === "GOVERNS" || type === "GOVERNED_BY" || type === "SUPERSEDES") return "#e6b35a";
+  if (type === "POTENTIALLY_SUPPORTS" || type === "DERIVED_FROM" || type === "MENTIONS" || type === "SOURCE_CANDIDATE") return "#7fd3ff";
+  if (type === "GOVERNS" || type === "GOVERNED_BY" || type === "SUPERSEDES" || type === "AMBIGUOUS") return "#e6b35a";
   return "#5d7388";
 }
 
