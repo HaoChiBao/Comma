@@ -21,7 +21,7 @@ export default function HomePage() {
   const [mode, setMode] = useState("audit");
   const [viewMode, setViewMode] = useState<"web" | "atom" | "structure">("web");
   const [selected, setSelected] = useState<string | null>(null);
-  const [focus, setFocus] = useState<string | null>("CASE-011");
+  const [focus, setFocus] = useState<string | null>(null);
   const [customRootId, setCustomRootId] = useState<string | null>(null);
   const [caseNodes, setCaseNodes] = useState<GraphNode[]>([]);
   const [caseEdges, setCaseEdges] = useState<GraphEdge[]>([]);

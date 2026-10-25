@@ -37,7 +37,7 @@ export function EvidenceGraph({
     <RadialWebGraph
       nodes={nodes}
       edges={edges}
-      initialRootId={rootId || (focused ? (focused === "CASE-011" ? "cell:D3" : undefined) : undefined)}
+      initialRootId={rootId}
       onRootChange={onRootChange}
       selected={selected}
       onSelect={onSelect}

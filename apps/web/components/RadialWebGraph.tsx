@@ -123,26 +123,26 @@ export function RadialWebGraph({
   }, [nodes]);
 
   useEffect(() => {
+    if (nodes.length === 0) return;
+
     if (initialRootId && nodeMap.has(initialRootId)) {
       setRootId(initialRootId);
       return;
     }
     if (rootId && nodeMap.has(rootId)) return;
 
-    // Pick CASE-011 / JE-911 if available, otherwise first decision
-    const je911 = nodes.find((n) => n.id.includes("cell:D3") || n.label === "JE-911" || n.label === "D3");
-    if (je911) {
-      setRootId(je911.id);
+    // Pick first decision or journal entry node (e.g. JE-900, JE-911)
+    const decision = nodes.find(
+      (n) => n.type === "DECISION" || n.label.startsWith("JE") || n.id.includes("cell:D3") || n.label === "D3"
+    );
+    if (decision) {
+      setRootId(decision.id);
       return;
     }
 
     let best = nodes[0]?.id || "";
     let bestDeg = -1;
     for (const n of nodes) {
-      if (n.type === "DECISION" || n.label.startsWith("JE")) {
-        setRootId(n.id);
-        return;
-      }
       const deg = adjacency.get(n.id)?.size || 0;
       if (deg > bestDeg) {
         bestDeg = deg;
@@ -150,7 +150,7 @@ export function RadialWebGraph({
       }
     }
     if (best) setRootId(best);
-  }, [initialRootId, nodes, nodeMap, adjacency]);
+  }, [initialRootId, nodes, nodeMap, adjacency, rootId]);
 
   // Tree State
   const [treeParents, setTreeParents] = useState<Map<string, string>>(new Map());
@@ -164,9 +164,7 @@ export function RadialWebGraph({
   // Undo History Stack (Max 40)
   const historyStack = useRef<HistorySnapshot[]>([]);
 
-  // Positions for smooth Emil Kowalski transitions
-  const [animPositions, setAnimPositions] = useState<Map<string, Point>>(new Map());
-  const prevPositions = useRef<Map<string, Point>>(new Map());
+  // Positions for transitions
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   // Push history snapshot
@@ -255,7 +253,7 @@ export function RadialWebGraph({
 
   // Initial Population when rootId is set
   useEffect(() => {
-    if (!rootId) return;
+    if (!rootId || !nodeMap.has(rootId)) return;
 
     const neighbors = Array.from(adjacency.get(rootId) || []);
     const newVisible = new Set<string>([rootId]);
@@ -381,40 +379,6 @@ export function RadialWebGraph({
 
     return result;
   }, [rootId, visibleIds, treeChildren, treeParents, openSet, nodeMap, groupNodes]);
-
-  // Emil Kowalski Animation Sequence: Start from parent's position and glide outward
-  useEffect(() => {
-    const nextMap = new Map<string, Point>();
-    const pMap = prevPositions.current;
-
-    for (const node of treeNodes) {
-      nextMap.set(node.id, { x: node.x, y: node.y });
-    }
-
-    // New entering nodes start at their parent's coordinate
-    const animMap = new Map<string, Point>();
-    for (const node of treeNodes) {
-      if (!pMap.has(node.id) && node.parentId && pMap.has(node.parentId)) {
-        animMap.set(node.id, pMap.get(node.parentId)!);
-      } else if (pMap.has(node.id)) {
-        animMap.set(node.id, pMap.get(node.id)!);
-      } else {
-        animMap.set(node.id, { x: node.x, y: node.y });
-      }
-    }
-    setAnimPositions(animMap);
-
-    // Double requestAnimationFrame to trigger CSS transition outward
-    const f1 = requestAnimationFrame(() => {
-      const f2 = requestAnimationFrame(() => {
-        setAnimPositions(nextMap);
-        prevPositions.current = nextMap;
-      });
-      return () => cancelAnimationFrame(f2);
-    });
-
-    return () => cancelAnimationFrame(f1);
-  }, [treeNodes]);
 
   // Click Handler (Expand, Collapse, Group, Cross-Links)
   const handleNodeClick = useCallback(
@@ -606,10 +570,10 @@ export function RadialWebGraph({
   const posMap = useMemo(() => {
     const map = new Map<string, Point>();
     for (const n of treeNodes) {
-      map.set(n.id, animPositions.get(n.id) || { x: n.x, y: n.y });
+      map.set(n.id, { x: n.x, y: n.y });
     }
     return map;
-  }, [treeNodes, animPositions]);
+  }, [treeNodes]);
 
   // Spotlight active trail: from root down to selected node, plus immediate children
   const activeTrail = useMemo(() => {
