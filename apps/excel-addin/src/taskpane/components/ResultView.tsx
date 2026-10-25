@@ -5,13 +5,23 @@ import { formatMoney, originLine } from "../view";
 import { KnowledgeGraph } from "./KnowledgeGraph";
 import { StatusDot } from "./StatusDot";
 
-export function ResultView({ trace, vendor, selected, onSelect, onOpenSource, onAddNote, onAction, busy }: { trace: SidebarTrace; vendor: string; selected: string; onSelect: (id: string) => void; onOpenSource: (id: string) => void; onAddNote: () => void; onAction: (label: string) => void; busy: boolean }) {
+export function ResultView({ trace, vendor, selected, onSelect, onOpenSource, onAddNote, onAction, busy }: { trace: SidebarTrace; vendor: string; selected: string; onSelect: (id: string) => void; onOpenSource: (id: string) => void; onAddNote: (message: string) => Promise<boolean>; onAction: (label: string) => void; busy: boolean }) {
   const [graphOpen, setGraphOpen] = React.useState(true);
+  const [noteOpen, setNoteOpen] = React.useState(false);
+  const [noteDraft, setNoteDraft] = React.useState("");
   const status = STATUS_VIEW[trace.status];
   const value = typeof trace.cell.raw_value === "number" ? money(trace.cell.raw_value) : trace.cell.display_text || String(trace.cell.raw_value ?? "");
   const item = trace.items.find((entry) => entry.id === selected);
   const toggle = (id: string) => onSelect(selected === id ? "" : id);
   const vendorName = trace.cell.vendor_name || vendor;
+  const submitNote = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!noteDraft.trim() || busy) return;
+    if (await onAddNote(noteDraft)) {
+      setNoteDraft("");
+      setNoteOpen(false);
+    }
+  };
   return (
     <div>
       <section className="summary">
@@ -99,8 +109,19 @@ export function ResultView({ trace, vendor, selected, onSelect, onOpenSource, on
       </section>
       <div className="result-actions">
         {ACTIONS[trace.status].map((action) => <button key={action.label} type="button" className={action.primary ? "ws-prim action" : "ws-sec action"} onClick={() => onAction(action.label)}>{action.label}</button>)}
-        {trace.status !== "supported" ? <button type="button" className="ws-link note-action" onClick={onAddNote} disabled={busy}>Add note to {trace.cell.address}</button> : null}
+        <button type="button" className="ws-sec action" onClick={() => setNoteOpen((open) => !open)} aria-expanded={noteOpen} aria-controls="custom-note-composer" disabled={busy}>Add a note</button>
       </div>
+      {noteOpen ? (
+        <form id="custom-note-composer" className="note-composer" onSubmit={(event) => void submitNote(event)}>
+          <label htmlFor="custom-note-message">Note for {trace.cell.address}</label>
+          <p className="mute small">This appears in Excel’s native note popup. Existing notes not created by WorldState are left unchanged.</p>
+          <textarea id="custom-note-message" value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="Write your note…" rows={4} maxLength={30000} autoFocus />
+          <div className="note-composer-actions">
+            <button type="submit" className="ws-prim action" disabled={busy || !noteDraft.trim()}>Add note</button>
+            <button type="button" className="ws-sec action" onClick={() => { setNoteOpen(false); setNoteDraft(""); }} disabled={busy}>Cancel</button>
+          </div>
+        </form>
+      ) : null}
     </div>
   );
 }
