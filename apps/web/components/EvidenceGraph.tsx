@@ -14,6 +14,8 @@ export function EvidenceGraph({
   selected,
   focused,
   viewMode = "web",
+  rootId,
+  onRootChange,
   onSelect,
 }: {
   nodes: GraphNode[];
@@ -21,6 +23,8 @@ export function EvidenceGraph({
   selected: string | null;
   focused?: string | null;
   viewMode?: "web" | "atom" | "structure";
+  rootId?: string | null;
+  onRootChange?: (id: string) => void;
   onSelect: (id: string) => void;
 }) {
   if (viewMode === "structure") {
@@ -33,7 +37,8 @@ export function EvidenceGraph({
     <RadialWebGraph
       nodes={nodes}
       edges={edges}
-      initialRootId={focused ? (focused === "CASE-011" ? "cell:D3" : undefined) : undefined}
+      initialRootId={rootId || (focused ? (focused === "CASE-011" ? "cell:D3" : undefined) : undefined)}
+      onRootChange={onRootChange}
       selected={selected}
       onSelect={onSelect}
     />

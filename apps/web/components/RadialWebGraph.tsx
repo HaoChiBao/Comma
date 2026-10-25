@@ -56,12 +56,14 @@ export function RadialWebGraph({
   nodes,
   edges,
   initialRootId,
+  onRootChange,
   selected,
   onSelect,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   initialRootId?: string | null;
+  onRootChange?: (newRoot: string) => void;
   selected: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -107,8 +109,18 @@ export function RadialWebGraph({
     return { adjacency: adj, edgeMap: emap };
   }, [edges]);
 
-  // Stable Root ID (Root never changes automatically when user selects a child!)
+  // Root ID state
   const [rootId, setRootId] = useState<string>("");
+  const [spotlightMode, setSpotlightMode] = useState<boolean>(true);
+
+  // Root Candidate list for the root picker dropdown
+  const rootCandidates = useMemo(() => {
+    const list = nodes.filter(
+      (n) => n.type === "DECISION" || n.label.startsWith("JE") || n.id.includes("cell:D3")
+    );
+    if (list.length === 0) return nodes.slice(0, 8);
+    return list;
+  }, [nodes]);
 
   useEffect(() => {
     if (initialRootId && nodeMap.has(initialRootId)) {
@@ -117,11 +129,17 @@ export function RadialWebGraph({
     }
     if (rootId && nodeMap.has(rootId)) return;
 
-    // Pick decision or most connected hub as root
+    // Pick CASE-011 / JE-911 if available, otherwise first decision
+    const je911 = nodes.find((n) => n.id.includes("cell:D3") || n.label === "JE-911" || n.label === "D3");
+    if (je911) {
+      setRootId(je911.id);
+      return;
+    }
+
     let best = nodes[0]?.id || "";
     let bestDeg = -1;
     for (const n of nodes) {
-      if (n.type === "DECISION" || n.label.startsWith("JE") || n.id.includes("cell:D3")) {
+      if (n.type === "DECISION" || n.label.startsWith("JE")) {
         setRootId(n.id);
         return;
       }
@@ -132,7 +150,7 @@ export function RadialWebGraph({
       }
     }
     if (best) setRootId(best);
-  }, [initialRootId, nodes, nodeMap, adjacency, rootId]);
+  }, [initialRootId, nodes, nodeMap, adjacency]);
 
   // Tree State
   const [treeParents, setTreeParents] = useState<Map<string, string>>(new Map());
@@ -593,6 +611,51 @@ export function RadialWebGraph({
     return map;
   }, [treeNodes, animPositions]);
 
+  // Spotlight active trail: from root down to selected node, plus immediate children
+  const activeTrail = useMemo(() => {
+    if (!selected) return new Set<string>();
+    const trail = new Set<string>();
+    let cur: string | null = selected;
+    while (cur) {
+      trail.add(cur);
+      cur = treeParents.get(cur) || null;
+    }
+    const kids = treeChildren.get(selected) || [];
+    for (const k of kids) trail.add(k);
+    return trail;
+  }, [selected, treeParents, treeChildren]);
+
+  // Dynamic Camera Auto-Framing: smoothly glides the stage to center the selected node and its immediate children
+  useEffect(() => {
+    if (!selected || isPanning.current) return;
+    const target = treeNodes.find((n) => n.id === selected);
+    if (!target) return;
+
+    const kids = (treeChildren.get(selected) || [])
+      .map((kidId) => treeNodes.find((n) => n.id === kidId))
+      .filter(Boolean) as WebNode[];
+
+    // Target focus point
+    let focusX = target.x;
+    let focusY = target.y;
+
+    if (kids.length > 0) {
+      focusX = target.x + 115; // Shift to frame both the selected node and its children
+      const avgKidY = kids.reduce((sum, k) => sum + k.y, 0) / kids.length;
+      focusY = (target.y + avgKidY) / 2;
+    }
+
+    // Visible stage area to the left of the drawer (drawer is 380px wide)
+    const visibleWidth = Math.max(340, dimensions.w - 420);
+    const targetScreenX = visibleWidth / 2;
+
+    setCamera((c) => ({
+      ...c,
+      x: targetScreenX - dimensions.w / 2 - focusX * c.k,
+      y: -focusY * c.k,
+    }));
+  }, [selected, treeNodes, treeChildren, dimensions.w]);
+
   const maxDepth = useMemo(() => {
     let m = 0;
     for (const n of treeNodes) {
@@ -626,6 +689,14 @@ export function RadialWebGraph({
       onPointerUp={() => {
         isPanning.current = null;
       }}
+      onWheel={(e) => {
+        // Smooth wheel zoom with clamp
+        const factor = e.deltaY < 0 ? 1.05 : 0.95;
+        setCamera((c) => ({
+          ...c,
+          k: Math.max(0.4, Math.min(2.0, Number((c.k * factor).toFixed(3)))),
+        }));
+      }}
     >
       {/* Floating Toolbar: Back Button & Depth Indicator */}
       <div className="radial-web-toolbar">
@@ -637,15 +708,59 @@ export function RadialWebGraph({
         >
           ↶ Back
         </button>
+
+        {/* Root Candidate Selector */}
+        <div className="web-root-picker">
+          <span className="picker-label">Root:</span>
+          <select
+            className="web-select"
+            value={rootId}
+            onChange={(e) => {
+              const newRoot = e.target.value;
+              setRootId(newRoot);
+              onSelect(newRoot);
+              onRootChange?.(newRoot);
+            }}
+          >
+            {rootCandidates.map((cand) => (
+              <option key={cand.id} value={cand.id}>
+                {cand.label} {cand.amount ? `($${cand.amount})` : ""} · {cand.type}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Spotlight Focus Mode Toggle */}
         <button
-          className="web-btn"
-          onClick={handleResetToRoot}
-          title="Reset flow to root record"
+          className={`web-btn ${spotlightMode ? "active" : ""}`}
+          onClick={() => setSpotlightMode((s) => !s)}
+          title="Toggle spotlight focus (dim unrelated branches)"
         >
-          Root: {nodeMap.get(rootId)?.label || "Start"}
+          {spotlightMode ? "⊙ Focused" : "○ All Visible"}
         </button>
+
+        {/* Zoom Controls */}
+        <div className="web-zoom-group" style={{ display: "inline-flex", gap: "2px" }}>
+          <button
+            className="web-btn"
+            style={{ padding: "0.25rem 0.55rem", fontWeight: 700 }}
+            onClick={() => setCamera((c) => ({ ...c, k: Math.min(2.0, Number((c.k * 1.15).toFixed(2))) }))}
+            title="Zoom In (+)"
+          >
+            +
+          </button>
+          <button
+            className="web-btn"
+            style={{ padding: "0.25rem 0.55rem", fontWeight: 700 }}
+            onClick={() => setCamera((c) => ({ ...c, k: Math.max(0.4, Number((c.k * 0.85).toFixed(2))) }))}
+            title="Zoom Out (−)"
+          >
+            −
+          </button>
+        </div>
+
         <span className="web-pill">
-          Flow: {maxDepth + 1} Tiers · {visibleIds.size} visible
+          {maxDepth + 1} Tiers · {visibleIds.size} visible
         </span>
       </div>
 
@@ -658,7 +773,12 @@ export function RadialWebGraph({
 
       {/* SVG Canvas */}
       <svg className="radial-svg">
-        <g transform={`translate(${dimensions.w / 2 + camera.x}, ${dimensions.h / 2 + camera.y}) scale(${camera.k})`}>
+        <g
+          style={{
+            transform: `translate(${dimensions.w / 2 + camera.x}px, ${dimensions.h / 2 + camera.y}px) scale(${camera.k})`,
+            transition: isPanning.current ? "none" : "transform 0.32s cubic-bezier(0.23, 1, 0.32, 1)",
+          }}
+        >
           {/* 1. Subtle Column Tier Dividers */}
           {Array.from({ length: maxDepth + 1 }).map((_, idx) => {
             const x = idx * 230;
@@ -701,6 +821,9 @@ export function RadialWebGraph({
 
               const strokeW = isSelected ? 1.8 : 1.1;
 
+              // Check if edge is in active spotlight trail
+              const isEdgeInFocus = !selected || !spotlightMode || (activeTrail.has(n.parentId!) && activeTrail.has(n.id));
+
               // Smooth horizontal cubic bezier curve
               const dx = c.x - p.x;
               const cpx1 = p.x + dx * 0.45;
@@ -715,8 +838,9 @@ export function RadialWebGraph({
                   stroke={strokeColor}
                   strokeWidth={strokeW}
                   strokeDasharray={isDashed ? "4 4" : "none"}
+                  opacity={isEdgeInFocus ? 1 : 0.08}
                   style={{
-                    transition: "d 0.24s cubic-bezier(0.23, 1, 0.32, 1), stroke 0.15s ease",
+                    transition: "d 0.24s cubic-bezier(0.23, 1, 0.32, 1), stroke 0.15s ease, opacity 0.22s ease",
                   }}
                 />
               );
@@ -755,6 +879,9 @@ export function RadialWebGraph({
             const color = getNodeColor(n.type);
             const r = n.isRoot ? 11 : 7.5;
 
+            // Spotlight focus check: active path or children
+            const isNodeInFocus = !selected || !spotlightMode || activeTrail.has(n.id);
+
             // Fill & Stroke logic:
             // Fill = type color when root or opened; white with type-colored stroke otherwise.
             const isFilled = n.isRoot || n.isOpen;
@@ -772,7 +899,8 @@ export function RadialWebGraph({
                 className="radial-node-group"
                 style={{
                   transform: `translate(${pos.x}px, ${pos.y}px)`,
-                  transition: "transform 0.24s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.2s cubic-bezier(0.23, 1, 0.32, 1)",
+                  opacity: isNodeInFocus ? 1 : 0.16,
+                  transition: "transform 0.24s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.22s ease",
                   cursor: "pointer",
                 }}
                 onClick={(e) => {

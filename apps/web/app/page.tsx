@@ -19,7 +19,8 @@ export default function HomePage() {
   const [mode, setMode] = useState("audit");
   const [viewMode, setViewMode] = useState<"web" | "atom" | "structure">("web");
   const [selected, setSelected] = useState<string | null>(null);
-  const [focus, setFocus] = useState<string | null>(null);
+  const [focus, setFocus] = useState<string | null>("CASE-011");
+  const [customRootId, setCustomRootId] = useState<string | null>(null);
   const [caseNodes, setCaseNodes] = useState<GraphNode[]>([]);
   const [caseEdges, setCaseEdges] = useState<GraphEdge[]>([]);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -233,6 +234,8 @@ export default function HomePage() {
           selected={selected}
           focused={focus}
           viewMode={viewMode}
+          rootId={customRootId}
+          onRootChange={setCustomRootId}
           onSelect={handleSelectNode}
         />
       </section>
@@ -264,8 +267,8 @@ export default function HomePage() {
               onChange={(e) => {
                 const val = e.target.value || null;
                 setFocus(val);
-                if (val === "CASE-011") setSelected("artifact:EM-208:v1");
-                else setSelected(null);
+                setCustomRootId(null);
+                setSelected(null);
               }}
             >
               <option value="">All Cases (Atom Graph)</option>
@@ -422,6 +425,14 @@ export default function HomePage() {
                   <span className="calc">$100.00 + $50.00 = $150.00</span>
                 </div>
               )}
+
+              <button
+                className="set-root-action-btn"
+                onClick={() => setCustomRootId(currentNode.id)}
+                title="Anchor this record as the root of the flow"
+              >
+                ✦ Set as Flow Root
+              </button>
             </div>
 
             {/* Evidence Document Metadata */}
