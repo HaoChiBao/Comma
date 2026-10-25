@@ -33,7 +33,63 @@ def extract_text(filename: str, media_type: str, payload: bytes) -> str:
 
         reader = PdfReader(io.BytesIO(payload))
         return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    if name.endswith(".xlsx"):
+        return _xlsx_text(payload)
     return payload.decode("utf-8", errors="replace").strip()
+
+
+def _xlsx_text(payload: bytes) -> str:
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    space = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(payload)) as book:
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in book.namelist():
+            root = ET.fromstring(book.read("xl/sharedStrings.xml"))
+            for item in root.findall(f"{space}si"):
+                shared.append("".join(node.text or "" for node in item.iter(f"{space}t")))
+        sheets = sorted(name for name in book.namelist() if name.startswith("xl/worksheets/sheet") and name.endswith(".xml"))
+        parts = []
+        for name in sheets:
+            root = ET.fromstring(book.read(name))
+            lines = []
+            for cell in root.iter(f"{space}c"):
+                ref = cell.attrib.get("r", "")
+                formula = cell.find(f"{space}f")
+                value = cell.find(f"{space}v")
+                text = ""
+                if cell.attrib.get("t") == "s" and value is not None and value.text and value.text.isdigit():
+                    index = int(value.text)
+                    text = shared[index] if index < len(shared) else ""
+                elif cell.attrib.get("t") == "inlineStr":
+                    text = "".join(node.text or "" for node in cell.iter(f"{space}t"))
+                elif value is not None and value.text:
+                    text = _xlsx_number(value.text)
+                formula_text = (formula.text or "").strip() if formula is not None else ""
+                if formula_text:
+                    shown = formula_text if formula_text.startswith("=") else f"={formula_text}"
+                    lines.append(f"{ref} {shown} => {text}".strip())
+                elif text:
+                    lines.append(f"{ref} {text}".strip())
+            if lines:
+                parts.append("\n".join(lines))
+    return "\n\n".join(parts).strip()
+
+
+def _xlsx_number(value: str) -> str:
+    try:
+        number = Decimal(value)
+    except Exception:
+        return value
+    if number == number.to_integral() and 2000 <= number <= 2100:
+        return str(int(number))
+    if Decimal("43000") <= number <= Decimal("52000"):
+        from datetime import datetime, timedelta
+
+        moment = datetime(1899, 12, 30) + timedelta(days=float(number))
+        return moment.strftime("%Y-%m-%d")
+    return f"USD {number.quantize(Decimal('0.01'))}"
 
 
 def _email_text(payload: bytes) -> str:

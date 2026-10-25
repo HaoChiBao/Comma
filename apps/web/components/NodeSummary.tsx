@@ -54,7 +54,7 @@ export function useNodeSummary(nodeId: string | null, actorId: string, asOf: str
 function SummaryPlaceholder() {
   return (
     <div className="summary-skeleton" aria-busy="true" aria-label="Reading this node">
-      {["What it is", "Relationships", "Connected to", "Potential errors"].map((label) => (
+      {["What it is", "Relationships", "Connected to", "Risks"].map((label) => (
         <div key={label}>
           <span className="summary-skeleton-label">{label}</span>
           <span className="summary-skeleton-line" />
@@ -78,7 +78,26 @@ export function NodeSummary({
 }) {
   if (error) return <p className="bad">{error}</p>;
   if (!summary) return <SummaryPlaceholder />;
-  return <div className="node-summary"><p>{linkRecords(summary.summary, nodes, summary.node_id, onOpen)}</p></div>;
+  const sections = [
+    ["What it is", summary.what],
+    ["Relationships", summary.relationships],
+    ["Connected to", summary.connected_to],
+    ["Risks", summary.risks],
+  ] as const;
+  return (
+    <div className="node-summary">
+      <dl>
+        {sections.map(([label, text]) =>
+          text ? (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{linkRecords(text, nodes, summary.node_id, onOpen)}</dd>
+            </div>
+          ) : null,
+        )}
+      </dl>
+    </div>
+  );
 }
 
 function linkRecords(text: string, nodes: GraphNode[], currentId: string, onOpen: (id: string) => void) {

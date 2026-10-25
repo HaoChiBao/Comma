@@ -119,6 +119,36 @@ def company_document_preview(
     return preview_document(db, organization_id, actor_id, utc(as_of), mode, version_id)
 
 
+@router.get("/company-graph/documents/{version_id}/file")
+def company_document_file(
+    version_id: str,
+    organization_id: str = "org-decagon",
+    actor_id: str = "actor-decagon-finance",
+    as_of: str = "2025-12-15T12:00:00+00:00",
+    mode: str = "audit",
+    db: Session = Depends(db_session),
+):
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    from app.company_graph import document_original
+    from app.document_preview import content_disposition
+
+    found = document_original(db, organization_id, actor_id, utc(as_of), mode, version_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Original file is not in this snapshot.")
+    data, media_type, filename = found
+    return Response(
+        content=data,
+        media_type=media_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": content_disposition(filename),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/cases")
 def list_cases(db: Session = Depends(db_session)):
     cases = db.scalars(select(Case).order_by(Case.id)).all()

@@ -1,23 +1,32 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DocumentPreview } from "@/components/DocumentPreview";
 import { EvidenceGraph } from "@/components/EvidenceGraph";
+import { InvestigationPanel } from "@/components/InvestigationPanel";
 import { NodeSummary, useNodeSummary } from "@/components/NodeSummary";
 import { IngestModal, type IngestJob } from "@/components/IngestModal";
 import { API_URL, api, type ActorRow, type CompanyDocument, type CompanyGraph, type GraphEdge, type GraphNode } from "@/lib/api";
+import {
+  buildInvestigation,
+  learnPrecedent,
+  loadPrecedents,
+  savePrecedents,
+  type AgentSuggestion,
+  type InvestigationStep,
+  type InferredLink,
+  type Precedent,
+} from "@/lib/investigate";
 
-const PRESETS = [
-  { id: "close", label: "30 Sep Before", asOf: "2025-09-30T16:59:59+00:00" },
-  { id: "accrual", label: "30 Sep Accrual", asOf: "2025-09-30T23:59:00+00:00" },
-  { id: "december", label: "15 Dec Review", asOf: "2025-12-15T12:00:00+00:00" },
-];
+function toUtcIso(date: Date) {
+  return `${date.toISOString().slice(0, 19)}+00:00`;
+}
 
 export default function HomePage() {
   const [graph, setGraph] = useState<CompanyGraph | null>(null);
   const [allActors, setAllActors] = useState<ActorRow[]>([]);
   const [actorId, setActorId] = useState("actor-maya");
-  const [asOf, setAsOf] = useState(PRESETS[1].asOf);
+  const [asOf] = useState(() => toUtcIso(new Date()));
   const [mode, setMode] = useState("audit");
   const [viewMode, setViewMode] = useState<"web" | "atom">("web");
   const [selected, setSelected] = useState<string | null>(null);
@@ -32,6 +41,17 @@ export default function HomePage() {
   const [pulse, setPulse] = useState(0);
   const [query, setQuery] = useState("");
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [drawnIds, setDrawnIds] = useState<string[]>([]);
+  const [steps, setSteps] = useState<InvestigationStep[]>([]);
+  const [shownSteps, setShownSteps] = useState(0);
+  const [investigating, setInvestigating] = useState(false);
+  const [suggestions, setSuggestions] = useState<AgentSuggestion[]>([]);
+  const [inferredLinks, setInferredLinks] = useState<InferredLink[]>([]);
+  const [dismissedIds, setDismissedIds] = useState<string[]>([]);
+  const [precedents, setPrecedents] = useState<Precedent[]>([]);
+  const [precedentsOpen, setPrecedentsOpen] = useState(false);
+  const [openSuggestionId, setOpenSuggestionId] = useState<string | null>(null);
+  const [streamNodeId, setStreamNodeId] = useState<string | null>(null);
 
   // 1. Fetch available actors
   useEffect(() => {
@@ -148,6 +168,96 @@ export default function HomePage() {
     handleSelectNode(nodeId);
   }
 
+  useEffect(() => {
+    const stored = loadPrecedents();
+    setPrecedents(stored);
+  }, []);
+
+  useEffect(() => {
+    if (precedents.length === 0) return;
+    savePrecedents(precedents);
+  }, [precedents]);
+
+  useEffect(() => {
+    setSuggestions([]);
+    setInferredLinks([]);
+    setDismissedIds([]);
+    setSteps([]);
+    setShownSteps(0);
+    setInvestigating(false);
+    setOpenSuggestionId(null);
+    setStreamNodeId(null);
+  }, [actorId, asOf, mode]);
+
+  useEffect(() => {
+    if (!investigating) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce || shownSteps >= steps.length) {
+      setShownSteps(steps.length);
+      setInvestigating(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShownSteps((count) => count + 1), 480);
+    return () => window.clearTimeout(timer);
+  }, [investigating, shownSteps, steps.length]);
+
+  const handleDrawnIds = useCallback((ids: string[]) => {
+    setDrawnIds((prev) => (prev.length === ids.length && prev.every((id, index) => id === ids[index]) ? prev : ids));
+  }, []);
+
+  function askAgent() {
+    if (!currentNode || !graph || investigating) return;
+    const result = buildInvestigation({
+      node: currentNode,
+      nodes: graph.nodes,
+      edges: graph.edges,
+      cases: graph.cases,
+      drawnIds,
+      precedents,
+      blockedIds: [...dismissedIds, ...inferredLinks.map((link) => link.target)],
+    });
+    setStreamNodeId(currentNode.id);
+    setSteps(result.steps);
+    setShownSteps(result.steps.length > 0 ? 1 : 0);
+    setInvestigating(result.steps.length > 1);
+    setSuggestions(result.suggestions);
+    setOpenSuggestionId(null);
+    setInspectorOpen(true);
+  }
+
+  function approveSuggestion(id: string) {
+    const suggestion = suggestions.find((item) => item.id === id);
+    if (!suggestion) return;
+    setInferredLinks((prev) =>
+      prev.some((link) => link.target === id && link.source === suggestion.anchorId)
+        ? prev
+        : [...prev, { id: `agent:${suggestion.anchorId}:${id}`, source: suggestion.anchorId, target: id }]
+    );
+    setSuggestions((prev) => prev.filter((item) => item.id !== id));
+    setOpenSuggestionId(null);
+    const anchor = graph?.nodes.find((item) => item.id === suggestion.anchorId);
+    setPrecedents((prev) => {
+      const learned = learnPrecedent(suggestion, anchor?.label || suggestion.anchorId);
+      const rest = prev.filter((item) => item.id !== learned.id);
+      return [learned, ...rest];
+    });
+  }
+
+  function dismissSuggestion(id: string) {
+    const suggestion = suggestions.find((item) => item.id === id);
+    setSuggestions((prev) => prev.filter((item) => item.id !== id));
+    setOpenSuggestionId(null);
+    if (suggestion) setDismissedIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  }
+
+  function togglePrecedent(id: string) {
+    setPrecedents((prev) => prev.map((item) => (item.id === id ? { ...item, kept: !item.kept } : item)));
+  }
+
+  const openSuggestion = suggestions.find((item) => item.id === openSuggestionId) || null;
+  const streamSteps = streamNodeId && currentNode?.id === streamNodeId ? steps : [];
+  const streamShown = streamNodeId && currentNode?.id === streamNodeId ? shownSteps : 0;
+
   return (
     <main className="fullscreen-workspace">
       {/* 1. Fullscreen Canvas Graph (Interactive Flow or Atom Network) */}
@@ -161,6 +271,16 @@ export default function HomePage() {
           rootId={customRootId}
           onRootChange={setCustomRootId}
           onSelect={handleSelectNode}
+          suggestions={suggestions}
+          inferredLinks={inferredLinks}
+          openSuggestionId={openSuggestionId}
+          onOpenSuggestion={(id) => {
+            setOpenSuggestionId(id);
+            setInspectorOpen(true);
+          }}
+          onApproveSuggestion={approveSuggestion}
+          onDismissSuggestion={dismissSuggestion}
+          onDrawnIds={handleDrawnIds}
         />
       </section>
 
@@ -171,18 +291,6 @@ export default function HomePage() {
           <a href="/" className="brand-title" style={{ padding: "0 4px", display: "inline-flex", alignItems: "center" }}>
             <img src="/comma-logo.png" alt="Comma" className="brand-logo-img" style={{ height: "30px", width: "auto" }} />
           </a>
-
-          <div className="presets" role="group" aria-label="As of date">
-            {PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                className={asOf === preset.asOf ? "primary" : ""}
-                onClick={() => setAsOf(preset.asOf)}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
 
           <div className="pill-select">
             <select
@@ -338,6 +446,25 @@ export default function HomePage() {
                   onOpen={openSummaryNode}
                 />
               </div>
+
+              <div className="inspector-agent-row">
+                <button type="button" className="primary ask-agent-btn" onClick={askAgent} disabled={investigating && streamNodeId === currentNode.id}>
+                  Ask agent to investigate
+                </button>
+                <button type="button" className={precedentsOpen ? "primary" : ""} aria-pressed={precedentsOpen} onClick={() => setPrecedentsOpen((openPanel) => !openPanel)}>
+                  Learned precedents
+                </button>
+              </div>
+              <InvestigationPanel
+                steps={streamSteps}
+                shown={streamShown}
+                precedentsOpen={precedentsOpen}
+                precedents={precedents}
+                suggestion={openSuggestion}
+                onApprove={approveSuggestion}
+                onDismiss={dismissSuggestion}
+                onTogglePrecedent={togglePrecedent}
+              />
 
               {currentNode.formula ? (
                 <div className="formula-box">

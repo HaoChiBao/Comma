@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { GraphEdge, GraphNode } from "@/lib/api";
+import type { AgentSuggestion, InferredLink } from "@/lib/investigate";
 
 type Point = { x: number; y: number };
 
@@ -92,6 +93,13 @@ export function RadialWebGraph({
   onRootChange,
   selected,
   onSelect,
+  suggestions = [],
+  inferredLinks = [],
+  openSuggestionId = null,
+  onOpenSuggestion,
+  onApproveSuggestion,
+  onDismissSuggestion,
+  onDrawnIds,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -99,12 +107,21 @@ export function RadialWebGraph({
   onRootChange?: (newRoot: string) => void;
   selected: string | null;
   onSelect: (id: string) => void;
+  suggestions?: AgentSuggestion[];
+  inferredLinks?: InferredLink[];
+  openSuggestionId?: string | null;
+  onOpenSuggestion?: (id: string) => void;
+  onApproveSuggestion?: (id: string) => void;
+  onDismissSuggestion?: (id: string) => void;
+  onDrawnIds?: (ids: string[]) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ w: 1000, h: 700 });
   const [camera, setCamera] = useState({ x: -280, y: 0, k: 1 });
   const isPanning = useRef<{ startX: number; startY: number; camX: number; camY: number } | null>(null);
   const heldSelection = useRef<string | null | undefined>(undefined);
+  const inferredRef = useRef<InferredLink[]>(inferredLinks);
+  inferredRef.current = inferredLinks;
 
   useEffect(() => {
     const el = containerRef.current;
@@ -249,6 +266,7 @@ export function RadialWebGraph({
       });
 
       newChildren.set(targetRoot, rootKids);
+      graftInferred(inferredRef.current, targetRoot, nodeMap, newVisible, newParents, newChildren, newGroups, newOpen);
       setVisibleIds(newVisible);
       setTreeParents(newParents);
       setTreeChildren(newChildren);
@@ -421,6 +439,35 @@ export function RadialWebGraph({
     skipReveal.current = true;
     initializeFlowForRoot(rootId, upstreamTrail);
   }, [rootId, upstreamTrail, initializeFlowForRoot]);
+
+  const treeRef = useRef({ visibleIds, treeParents, treeChildren, groupNodes, openSet, rootId });
+  treeRef.current = { visibleIds, treeParents, treeChildren, groupNodes, openSet, rootId };
+
+  useEffect(() => {
+    if (!inferredLinks.length || !rootId || !nodeMap.has(rootId)) return;
+    const tree = treeRef.current;
+    const vis = new Set(tree.visibleIds);
+    const parents = new Map(tree.treeParents);
+    const children = new Map(tree.treeChildren);
+    const groups = new Map(tree.groupNodes);
+    const open = new Set(tree.openSet);
+    const needs =
+      inferredLinks.some((link) => nodeMap.has(link.target) && !vis.has(link.target)) ||
+      inferredLinks.some((link) => vis.has(link.source) && vis.has(link.target) && parents.get(link.target) !== link.source);
+    if (!needs) return;
+    graftInferred(inferredLinks, rootId, nodeMap, vis, parents, children, groups, open);
+    setVisibleIds(vis);
+    setTreeParents(parents);
+    setTreeChildren(children);
+    setGroupNodes(groups);
+    setOpenSet(open);
+  }, [inferredLinks, rootId, nodeMap]);
+
+  useEffect(() => {
+    if (!onDrawnIds) return;
+    const ids = [...visibleIds].filter((id) => !id.startsWith("group:") && nodeMap.has(id)).sort();
+    onDrawnIds(ids);
+  }, [visibleIds, nodeMap, onDrawnIds]);
 
   // Bring a selection that sits outside the expanded web onto the tree,
   // so spotlight has a real path instead of dimming every visible node.
@@ -883,6 +930,25 @@ export function RadialWebGraph({
     });
   }, [treeNodes, upstreamNodes, dimensions.w, dimensions.h, selected]);
 
+  const inferredPairs = useMemo(() => {
+    const pairs = new Set<string>();
+    for (const link of inferredLinks) {
+      pairs.add(`${link.source}|${link.target}`);
+      pairs.add(`${link.target}|${link.source}`);
+    }
+    return pairs;
+  }, [inferredLinks]);
+
+  const ghostLayout = useMemo(() => {
+    const placed = new Map(treeNodes.map((node) => [node.id, { x: node.x, y: node.y }]));
+    return suggestions
+      .filter((item) => !visibleIds.has(item.id))
+      .map((item, index) => {
+        const anchor = placed.get(item.anchorId) || placed.get(rootId) || { x: 0, y: 0 };
+        return { ...item, x: anchor.x + 188, y: anchor.y - 78 - index * 52 };
+      });
+  }, [suggestions, visibleIds, treeNodes, rootId]);
+
   // Stable, Calm Camera Framing: keeps root anchored on the left without jarring whip-pans.
   // A Center click holds this camera until the selection changes.
   useEffect(() => {
@@ -892,7 +958,10 @@ export function RadialWebGraph({
 
     // Anchor root at 250px from stage left if upstream origin exists, else 130px
     const baseAnchorX = upstreamTrail.length > 0 ? 250 : 130;
-    const maxVisibleX = treeNodes.reduce((max, n) => Math.max(max, n.x), 0);
+    const maxVisibleX = Math.max(
+      treeNodes.reduce((max, n) => Math.max(max, n.x), 0),
+      ghostLayout.reduce((max, node) => Math.max(max, node.x + 220), 0)
+    );
     const visibleWidth = Math.max(340, dimensions.w - 440); // 440px reserved for drawer + margins
 
     let targetCamX = baseAnchorX - dimensions.w / 2;
@@ -907,7 +976,7 @@ export function RadialWebGraph({
       if (Math.abs(c.x - targetCamX) < 4 && Math.abs(c.y) < 4) return c;
       return { ...c, x: targetCamX, y: 0 };
     });
-  }, [treeNodes, upstreamTrail.length, dimensions.w, camera.k, selected]);
+  }, [treeNodes, ghostLayout, upstreamTrail.length, dimensions.w, camera.k, selected]);
 
   const maxDepth = useMemo(() => {
     let m = 0;
@@ -1175,6 +1244,7 @@ export function RadialWebGraph({
               const isHovered = hoveredId === n.id || hoveredId === n.parentId;
               const isContradiction = edgeType === "CONTRADICTS";
               const isSupports = edgeType === "RECONCILES_WITH" || edgeType === "POTENTIALLY_SUPPORTS";
+              const isAgent = inferredPairs.has(`${n.parentId}|${n.id}`);
               const isDashed = n.isGroup || edgeType === "POTENTIALLY_SUPPORTS";
 
               const isSpawning = spawningIds.has(n.id);
@@ -1205,22 +1275,30 @@ export function RadialWebGraph({
               const cpx2 = c.x - dx * 0.45;
               const pathD = `M ${p.x} ${p.y} C ${cpx1} ${p.y}, ${cpx2} ${c.y}, ${c.x} ${c.y}`;
 
+              const midX = (p.x + c.x) / 2;
+              const midY = (p.y + c.y) / 2;
               return (
-                <path
-                  key={`edge-${n.parentId}-${n.id}`}
-                  className="flow-branch-edge"
-                  d={pathD}
-                  fill="none"
-                  stroke={strokeColor}
-                  strokeWidth={strokeW}
-                  strokeDasharray={isDashed ? "4 4" : "none"}
-                  opacity={edgeOpacity}
-                  style={{
-                    transition: isSpawning
-                      ? "none"
-                      : "d 260ms cubic-bezier(0.23, 1, 0.32, 1), opacity 200ms cubic-bezier(0.23, 1, 0.32, 1), stroke 0.15s ease",
-                  }}
-                />
+                <g key={`edge-${n.parentId}-${n.id}`}>
+                  <path
+                    className={isAgent ? "flow-branch-edge agent-inferred-edge" : "flow-branch-edge"}
+                    d={pathD}
+                    fill="none"
+                    stroke={isAgent ? "#FA6610" : strokeColor}
+                    strokeWidth={isAgent ? 2.2 : strokeW}
+                    strokeDasharray={isAgent ? undefined : isDashed ? "4 4" : "none"}
+                    opacity={isAgent ? 1 : edgeOpacity}
+                    style={{
+                      transition: isSpawning
+                        ? "none"
+                        : "d 260ms cubic-bezier(0.23, 1, 0.32, 1), opacity 200ms cubic-bezier(0.23, 1, 0.32, 1), stroke 0.15s ease",
+                    }}
+                  />
+                  {isAgent ? (
+                    <text x={midX} y={midY - 8} textAnchor="middle" className="agent-inferred-label">
+                      Agent inferred
+                    </text>
+                  ) : null}
+                </g>
               );
             })}
 
@@ -1340,10 +1418,104 @@ export function RadialWebGraph({
               </g>
             );
           })}
+
+          {ghostLayout.map((ghost) => {
+            const anchor = posMap.get(ghost.anchorId) || treeNodes.find((node) => node.id === ghost.anchorId);
+            const ax = anchor && "x" in anchor ? anchor.x : ghost.x - 188;
+            const ay = anchor && "y" in anchor ? anchor.y : ghost.y + 78;
+            const open = openSuggestionId === ghost.id;
+            const ring = ghost.edgeType === "CONTRADICTS" ? "#FA6610" : ghost.edgeType === "AMBIGUOUS" ? "#8B5CF6" : "#64748B";
+            return (
+              <g key={`ghost-${ghost.id}`} className="agent-ghost" transform={`translate(${ghost.x} ${ghost.y})`}>
+                <path
+                  d={`M ${ax - ghost.x} ${ay - ghost.y} L -16 0`}
+                  fill="none"
+                  stroke={ring}
+                  strokeWidth={1.2}
+                  strokeDasharray="3 4"
+                  opacity={0.7}
+                />
+                <g
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenSuggestion?.(ghost.id);
+                  }}
+                >
+                  <circle r={16} fill="none" stroke={ring} strokeWidth={1.4} strokeDasharray="4 3" className="suggestion-ring" />
+                  <circle r={5} fill="#FFFFFF" stroke={ring} strokeWidth={1.4} />
+                  <text x={20} y={4} textAnchor="start" className="radial-node-label agent-ghost-label">
+                    {`Suggested by Comma Agent: ${ghost.label}${ghost.amount ? ` · $${ghost.amount}` : ""}`}
+                  </text>
+                </g>
+                {open ? (
+                  <g className="ghost-actions" onPointerDown={(event) => event.stopPropagation()}>
+                    <g
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onApproveSuggestion?.(ghost.id);
+                      }}
+                    >
+                      <rect x={20} y={14} width={72} height={20} rx={5} fill="#0D0D0C" />
+                      <text x={56} y={28} textAnchor="middle" fill="#FFFFFF" fontSize={11} fontWeight={650}>
+                        Approve
+                      </text>
+                    </g>
+                    <g
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDismissSuggestion?.(ghost.id);
+                      }}
+                    >
+                      <rect x={98} y={14} width={72} height={20} rx={5} fill="#FFFFFF" stroke="#E7DDD2" />
+                      <text x={134} y={28} textAnchor="middle" fill="#0D0D0C" fontSize={11} fontWeight={650}>
+                        Dismiss
+                      </text>
+                    </g>
+                  </g>
+                ) : null}
+              </g>
+            );
+          })}
         </g>
       </svg>
     </div>
   );
+}
+
+function graftInferred(
+  links: InferredLink[],
+  rootId: string,
+  nodeMap: Map<string, GraphNode>,
+  vis: Set<string>,
+  parents: Map<string, string>,
+  children: Map<string, string[]>,
+  groups: Map<string, { members?: GraphNode[]; parentId?: string; type?: string; label?: string; count?: number; id?: string }>,
+  open: Set<string>
+) {
+  for (const link of links) {
+    if (!nodeMap.has(link.target)) continue;
+    const groupId = groupIdForMember(link.target, groups, vis);
+    if (groupId) pullGroupMember(groupId, link.target, vis, parents, children, groups, open, rootId);
+    if (!vis.has(link.target)) {
+      const parentId = vis.has(link.source) ? link.source : rootId;
+      vis.add(link.target);
+      parents.set(link.target, parentId);
+      const kids = [...(children.get(parentId) || [])];
+      if (!kids.includes(link.target)) kids.push(link.target);
+      children.set(parentId, kids);
+      open.add(parentId);
+    }
+    if (vis.has(link.source) && parents.get(link.target) !== link.source) {
+      const oldParent = parents.get(link.target);
+      if (oldParent) children.set(oldParent, (children.get(oldParent) || []).filter((kid) => kid !== link.target));
+      parents.set(link.target, link.source);
+      const kids = [...(children.get(link.source) || [])];
+      if (!kids.includes(link.target)) kids.push(link.target);
+      children.set(link.source, kids);
+      open.add(link.source);
+    }
+  }
 }
 
 function groupIdForMember(

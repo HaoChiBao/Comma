@@ -1,5 +1,6 @@
 import csv
 import io
+import os
 import zipfile
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -25,11 +26,11 @@ from app.models import (
     Organization,
     SourceArtifact,
 )
-from app.temporal import money, sha256_text, utc
+from app.temporal import aware, money, sha256_text, utc
 
 ORG = "org-decagon"
-PACK = Path(__file__).resolve().parents[2] / "data" / "decagon-agent-safe.zip"
-ROOT = "Decagon_WorldState_Synthetic_Dataset/"
+PACK = Path(os.environ.get("DECAGON_PACK") or Path(__file__).resolve().parents[2] / "data" / "decagon-agent-safe.zip")
+ROOT = os.environ.get("DECAGON_ROOT") or "Decagon_WorldState_Synthetic_Dataset/"
 CHUNK = 40
 ACTORS = (
     ("actor-decagon-finance", "Avery Lin", "accountant"),
@@ -38,15 +39,39 @@ ACTORS = (
 )
 KIND = {
     "INVOICE": "invoice",
+    "CUSTOMER_INVOICE": "invoice",
     "PURCHASE_ORDER": "purchase_order",
+    "ORDER_FORM": "purchase_order",
     "EMAIL": "email",
     "SERVICE_CONFIRMATION": "memo",
     "CONTRACT": "contract",
     "CONTRACT_AMENDMENT": "contract",
     "POLICY": "policy",
     "REMITTANCE": "memo",
+    "CREDIT_MEMO": "memo",
     "ACCRUAL_DECISION": "journal",
     "CORRECTIVE_JOURNAL": "journal",
+    "JOURNAL": "journal",
+}
+_CANONICAL_RANK = {
+    "INVOICE": 0,
+    "CUSTOMER_INVOICE": 1,
+    "PURCHASE_ORDER": 2,
+    "ORDER_FORM": 3,
+    "CONTRACT": 4,
+    "CONTRACT_AMENDMENT": 5,
+    "CREDIT_MEMO": 6,
+    "USAGE_REPORT": 7,
+    "BANK_FEED": 8,
+    "SERVICE_CONFIRMATION": 9,
+    "POLICY": 10,
+    "REMITTANCE": 11,
+    "ACCRUAL_WORKPAPER": 20,
+    "FINANCE_WORKPAPER": 21,
+    "RECONCILIATION": 30,
+    "APPROVAL": 40,
+    "REVIEW_PACKET": 50,
+    "EMAIL": 90,
 }
 SCOPE_ROLE = {"finance": "accountant", "operations": "accountant", "controller": "auditor", "legal": "legal"}
 
@@ -129,13 +154,15 @@ def catalog(db: Session, job: IngestJob, step: IngestStep) -> dict:
 def absorb(db: Session, job: IngestJob, step: IngestStep) -> dict:
     paths = list((step.detail_json or {}).get("paths") or [])
     manifest = {row["path"]: row for row in _manifest()}
+    identity = _identities(list(manifest.values()))
     amounts = _graph_amounts()
     seen = {record.external_id for record in db.scalars(select(IngestRecord).where(IngestRecord.job_id == job.id)).all()}
     written = 0
     with zipfile.ZipFile(PACK) as archive:
         for index, path in enumerate(paths):
             row = manifest[path]
-            if row["entity_id"] in seen:
+            external_id, extra_refs = identity[path]
+            if external_id in seen:
                 continue
             payload = archive.read(ROOT + path)
             filename = path.rsplit("/", 1)[-1]
@@ -145,27 +172,34 @@ def absorb(db: Session, job: IngestJob, step: IngestStep) -> dict:
                 text = ""
             if not text.strip():
                 text = f"{row['source_type']} {row['entity_id']}"
-            parsed = parse_document(text, utc(row["available_at"]))
-            chosen = next((item for item in parsed if item["external_id"] == row["entity_id"]), parsed[0])
-            amount = Decimal(amounts[row["entity_id"]]) if row["entity_id"] in amounts and amounts[row["entity_id"]] else chosen["amount"]
+            try:
+                parsed = parse_document(text, utc(row["available_at"]))
+                chosen = next((item for item in parsed if item["external_id"] == external_id), parsed[0])
+            except Exception:
+                chosen = {"vendor": "", "amount": None, "references": [], "formula": ""}
+            amount = chosen["amount"]
+            if external_id == row["entity_id"] and amounts.get(row["entity_id"]):
+                amount = Decimal(amounts[row["entity_id"]])
+            references = list(dict.fromkeys([*chosen["references"], *extra_refs]))
             _persist(
                 db,
                 job,
                 filename=filename,
                 text=text,
-                external_id=row["entity_id"],
+                external_id=external_id,
                 kind=KIND.get(row["source_type"], "memo"),
                 vendor=chosen["vendor"],
                 amount=amount,
                 document_date=_day(row["document_date"], row["available_at"]),
                 available_from=utc(row["available_at"]),
                 case_id=row["case_id"],
-                entity_ref=(row["case_id"] or row["entity_id"]).lower(),
-                references=chosen["references"],
+                entity_ref=(row["case_id"] or external_id).lower(),
+                references=references,
                 scopes=row["actor_scope"],
                 source_type=row["source_type"],
+                formula=chosen.get("formula") or "",
             )
-            seen.add(row["entity_id"])
+            seen.add(external_id)
             written += 1
             detail = dict(step.detail_json or {})
             detail["done"] = index + 1
@@ -208,6 +242,7 @@ def decisions(db: Session, job: IngestJob, step: IngestStep) -> dict:
             source_type=node["kind"],
         )
         written += 1
+    written += _record_v2_journals(db, job, seen)
     return {"decisions": written}
 
 
@@ -284,6 +319,41 @@ def open_cases(db: Session, job: IngestJob, step: IngestStep) -> dict:
                 )
             )
         opened.append(case_id)
+    for row in _optional_csv("data_extensions/v2_case_registry.csv"):
+        group = grouped.get(row["case_id"], [])
+        if not group:
+            continue
+        decision = next((pair for pair in group if pair[0].external_id == row["primary_record"]), None)
+        if decision is None:
+            continue
+        vendor = next((pair[0].vendor for pair in group if pair[0].kind in {"purchase_order", "contract"} and pair[0].vendor), "")
+        if not vendor:
+            vendor = row["title"]
+        case_id = row["case_id"]
+        probe = [pair[1].id for pair in group]
+        policy_name = "POL-ACC-v2" if aware(decision[0].available_from) >= utc("2025-10-01T00:00:00+00:00") else "POL-ACC-v1"
+        policy = _policy_version(db, policy_name)
+        if policy is not None and policy not in probe:
+            probe.append(policy)
+            _tag_case(db, policy, case_id)
+        if db.get(Case, case_id) is None:
+            db.add(
+                Case(
+                    id=case_id,
+                    organization_id=ORG,
+                    case_type="accrual_investigation",
+                    decision_artifact_id=_artifact_id(decision[1].id),
+                    decision_version_id=decision[1].id,
+                    decision_at=decision[0].available_from,
+                    summary=f"{row['title']}. Related documents appear on the graph only after each one was available.",
+                    status="open",
+                    vendor_name=vendor,
+                    entity_ref=row["case_id"].lower(),
+                    recorded_amount=decision[0].amount or Decimal("0"),
+                    probe_version_ids=probe,
+                )
+            )
+        opened.append(case_id)
     return {"cases": opened}
 
 
@@ -292,13 +362,14 @@ def analyze(db: Session, job: IngestJob, step: IngestStep) -> dict:
     from app.snapshots import create_snapshot
 
     needed = [node["id"] for node in _graph_nodes() if not node["id"].startswith("POLICY-CONTEXT")]
+    needed.extend(row["primary_record"] for row in _optional_csv("data_extensions/v2_case_registry.csv"))
     have = {record.external_id for record in db.scalars(select(IngestRecord).where(IngestRecord.job_id == job.id)).all()}
     missing = [item for item in needed if item not in have]
     if missing:
         raise ValueError("Case evidence was not recorded: " + ", ".join(missing))
     findings = []
     moment = utc("2025-12-15T12:00:00+00:00")
-    for row in _registry():
+    for row in [*_registry(), *_optional_csv("data_extensions/v2_case_registry.csv")]:
         if db.get(Case, row["case_id"]) is None:
             raise ValueError(f"{row['case_id']} was not opened.")
         snapshot = create_snapshot(db, case_id=row["case_id"], actor_id="actor-decagon-auditor", as_of=moment, mode="audit")
@@ -334,6 +405,7 @@ def _persist(
     references: list,
     scopes: str,
     source_type: str,
+    formula: str = "",
 ) -> None:
     document = IngestDocument(
         id=uuid4().hex[:16],
@@ -360,7 +432,7 @@ def _persist(
         document_date=document_date,
         available_from=available_from,
         text=text,
-        formula="",
+        formula=formula,
     )
     db.add(record)
     db.flush()
@@ -393,7 +465,7 @@ def _persist(
             ingested_at=datetime.now(timezone.utc),
             availability_status="verified",
             availability_evidence="Availability comes from the company source manifest. The printed date is not availability.",
-            metadata_json={"case_ids": [case_id] if case_id else [], "entity_ref": entity_ref, "formula": "", "job_id": job.id},
+            metadata_json={"case_ids": [case_id] if case_id else [], "entity_ref": entity_ref, "formula": formula, "job_id": job.id},
         )
     )
     db.flush()
@@ -482,6 +554,10 @@ def _media(filename: str) -> str:
         return "application/pdf"
     if name.endswith(".eml"):
         return "message/rfc822"
+    if name.endswith(".xlsx"):
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if name.endswith(".csv"):
+        return "text/csv"
     return "text/plain"
 
 
@@ -520,3 +596,83 @@ def _graph_nodes() -> list[dict]:
 
 def _graph_amounts() -> dict[str, str]:
     return {node["id"]: node.get("amount_usd") or "" for node in _graph_nodes()}
+
+
+def _optional_csv(name: str) -> list[dict]:
+    try:
+        return list(csv.DictReader(io.StringIO(_read(name))))
+    except KeyError:
+        return []
+
+
+def _journal_ids() -> set[str]:
+    ids = {node["id"] for node in _graph_nodes() if node["kind"] in {"ACCRUAL_DECISION", "CORRECTIVE_JOURNAL"}}
+    ids.update(row["journal_id"] for row in _optional_csv("data_extensions/v2_journal_lines.csv") if row.get("journal_id"))
+    return ids
+
+
+def _identities(rows: list[dict]) -> dict[str, tuple[str, list[str]]]:
+    journals = _journal_ids()
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row["entity_id"], []).append(row)
+    assigned: dict[str, tuple[str, list[str]]] = {}
+    used: set[str] = set()
+    for entity_id, group in groups.items():
+        keeper = None
+        if entity_id not in journals:
+            keeper = min(group, key=lambda row: (_CANONICAL_RANK.get(row["source_type"], 60), row["path"]))
+        for row in group:
+            if keeper is not None and row["path"] == keeper["path"] and entity_id not in used:
+                assigned[row["path"]] = (entity_id, [])
+                used.add(entity_id)
+                continue
+            external_id = row["source_id"]
+            if external_id in used or external_id == entity_id:
+                external_id = f"{row['source_id']}:{entity_id}"
+            assigned[row["path"]] = (external_id, [entity_id])
+            used.add(external_id)
+    return assigned
+
+
+def _record_v2_journals(db: Session, job: IngestJob, seen: set[str]) -> int:
+    grouped: dict[str, list[dict]] = {}
+    for row in _optional_csv("data_extensions/v2_journal_lines.csv"):
+        grouped.setdefault(row["journal_id"], []).append(row)
+    written = 0
+    for journal_id, lines in grouped.items():
+        if journal_id in seen:
+            continue
+        debits = [Decimal(line["debit_usd"] or "0") for line in lines]
+        amount = sum((value for value in debits if value), Decimal("0"))
+        when = utc(lines[0]["recorded_at"])
+        references = []
+        body = [f"Journal {journal_id}", f"Recorded at: {lines[0]['recorded_at']}", f"Accounting period: {lines[0]['accounting_period']}"]
+        for line in lines:
+            ref = (line.get("source_ref") or "").strip()
+            if ref and ref not in references:
+                references.append(ref)
+            body.append(
+                f"{line['line_id']} account {line['account']} debit ${line['debit_usd']} credit ${line['credit_usd']} {line.get('memo') or ''}".strip()
+            )
+        body.append("No formula is preserved for this entry.")
+        _persist(
+            db,
+            job,
+            filename=f"{journal_id}.txt",
+            text="\n".join(body),
+            external_id=journal_id,
+            kind="journal",
+            vendor=lines[0]["case_id"],
+            amount=amount,
+            document_date=when,
+            available_from=when,
+            case_id=lines[0]["case_id"],
+            entity_ref=lines[0]["case_id"].lower(),
+            references=references or [journal_id],
+            scopes="finance,operations,controller",
+            source_type="JOURNAL",
+        )
+        seen.add(journal_id)
+        written += 1
+    return written

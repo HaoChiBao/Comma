@@ -124,7 +124,41 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
 
 
 def preview_document(db: Session, organization_id: str, actor_id: str, as_of: datetime, mode: str, version_id: str) -> dict:
-    """Full text of one document that this actor can already see. A hidden document returns no text."""
+    """One visible document, including original bytes metadata when the file is still stored.
+
+    A hidden version raises before any title, amount, text, or bytes are returned.
+    ``text`` is the stored extraction, never the short graph excerpt.
+    """
+    from app.document_preview import preview_fields
+
+    version = _visible_version(db, organization_id, actor_id, as_of, mode, version_id)
+    amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
+    body = {
+        "id": version.artifact.external_id,
+        "version_id": version.id,
+        "title": version.artifact.title,
+        "kind": version.artifact.kind,
+        "amount": money(amount),
+        "available_from": version.available_from.isoformat() if version.available_from else None,
+        "document_date": version.document_date.isoformat() if version.document_date else None,
+        "text": version.content_text,
+    }
+    body.update(preview_fields(db, version))
+    return body
+
+
+def document_original(db: Session, organization_id: str, actor_id: str, as_of: datetime, mode: str, version_id: str) -> tuple[bytes, str, str] | None:
+    """Bytes for a visible version, or None when only extracted text was kept."""
+    from app.document_preview import locate_original
+
+    version = _visible_version(db, organization_id, actor_id, as_of, mode, version_id)
+    found = locate_original(db, version)
+    if found is None:
+        return None
+    return found.data, found.media_type, found.filename
+
+
+def _visible_version(db: Session, organization_id: str, actor_id: str, as_of: datetime, mode: str, version_id: str) -> ArtifactVersion:
     if mode not in {"audit", "pre_decision"}:
         raise AccessError("NOT_IN_SNAPSHOT")
     actor = get_actor(db, actor_id)
@@ -154,17 +188,7 @@ def preview_document(db: Session, organization_id: str, actor_id: str, as_of: da
     )
     if reason:
         raise AccessError(reason)
-    amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
-    return {
-        "id": version.artifact.external_id,
-        "version_id": version.id,
-        "title": version.artifact.title,
-        "kind": version.artifact.kind,
-        "amount": money(amount),
-        "available_from": version.available_from.isoformat() if version.available_from else None,
-        "document_date": version.document_date.isoformat() if version.document_date else None,
-        "text": version.content_text,
-    }
+    return version
 
 
 def _document(version: ArtifactVersion, case_ids: list[str], on_graph: bool) -> dict:

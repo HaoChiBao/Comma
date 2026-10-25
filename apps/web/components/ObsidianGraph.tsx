@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { GraphEdge, GraphNode } from "@/lib/api";
+import type { AgentSuggestion, InferredLink } from "@/lib/investigate";
+
+type AgentHit = { kind: "ghost" | "approve" | "dismiss"; id: string; x: number; y: number; w: number; h: number };
 
 type Node3D = {
   id: string;
@@ -52,12 +55,26 @@ export function ObsidianGraph({
   selected,
   focused,
   onSelect,
+  suggestions = [],
+  inferredLinks = [],
+  openSuggestionId = null,
+  onOpenSuggestion,
+  onApproveSuggestion,
+  onDismissSuggestion,
+  onDrawnIds,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   selected: string | null;
   focused?: string | null;
   onSelect: (id: string) => void;
+  suggestions?: AgentSuggestion[];
+  inferredLinks?: InferredLink[];
+  openSuggestionId?: string | null;
+  onOpenSuggestion?: (id: string) => void;
+  onApproveSuggestion?: (id: string) => void;
+  onDismissSuggestion?: (id: string) => void;
+  onDrawnIds?: (ids: string[]) => void;
 }) {
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -93,6 +110,23 @@ export function ObsidianGraph({
   const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
 
   const [hover, setHover] = useState<string | null>(null);
+  const suggestionsRef = useRef(suggestions);
+  const inferredRef = useRef(inferredLinks);
+  const openSuggestionRef = useRef(openSuggestionId);
+  const ghostHits = useRef<AgentHit[]>([]);
+  const glowRef = useRef(0);
+  const reduceMotion = useRef(false);
+  suggestionsRef.current = suggestions;
+  inferredRef.current = inferredLinks;
+  openSuggestionRef.current = openSuggestionId;
+
+  useEffect(() => {
+    reduceMotion.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }, []);
+
+  useEffect(() => {
+    onDrawnIds?.(nodes.map((node) => node.id).sort());
+  }, [nodes, onDrawnIds]);
 
   const signature = useMemo(() => `${nodes.length}:${edges.length}:${nodes.map((n) => n.id).join("|")}`, [nodes, edges]);
 
@@ -253,6 +287,18 @@ export function ObsidianGraph({
         hover,
         selected
       );
+      if (!reduceMotion.current) glowRef.current = (glowRef.current + 0.7) % 28;
+      drawAgentOverlay(
+        ctx,
+        bodies.current,
+        suggestionsRef.current,
+        inferredRef.current,
+        openSuggestionRef.current,
+        selected,
+        glowRef.current,
+        reduceMotion.current,
+        ghostHits.current
+      );
 
       frameId = window.requestAnimationFrame(tick);
     };
@@ -290,6 +336,14 @@ export function ObsidianGraph({
   }, []);
 
   // Hit test on projected 2D screen coordinates
+  const findAgentHit = useCallback((clientX: number, clientY: number) => {
+    const rect = canvas.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+    return ghostHits.current.find((hit) => sx >= hit.x && sx <= hit.x + hit.w && sy >= hit.y && sy <= hit.y + hit.h) || null;
+  }, []);
+
   const findNodeAtScreen = useCallback((clientX: number, clientY: number) => {
     const rect = canvas.current?.getBoundingClientRect();
     if (!rect) return null;
@@ -359,6 +413,14 @@ export function ObsidianGraph({
         aria-label="3D rotating atom graph"
         onPointerDown={(event) => {
           pointerDownPos.current = { x: event.clientX, y: event.clientY };
+          const agentHit = findAgentHit(event.clientX, event.clientY);
+          if (agentHit) {
+            if (agentHit.kind === "approve") onApproveSuggestion?.(agentHit.id);
+            else if (agentHit.kind === "dismiss") onDismissSuggestion?.(agentHit.id);
+            else onOpenSuggestion?.(agentHit.id);
+            event.currentTarget.setPointerCapture(event.pointerId);
+            return;
+          }
           const hitNode = findNodeAtScreen(event.clientX, event.clientY);
           if (hitNode) {
             isDraggingNode.current = hitNode.id;
@@ -430,7 +492,7 @@ export function ObsidianGraph({
         onPointerUp={(event) => {
           if (pointerDownPos.current) {
             const dist = Math.hypot(event.clientX - pointerDownPos.current.x, event.clientY - pointerDownPos.current.y);
-            if (dist < 6 && !isDraggingNode.current) {
+            if (dist < 6 && !isDraggingNode.current && !findAgentHit(event.clientX, event.clientY)) {
               const hitNode = findNodeAtScreen(event.clientX, event.clientY);
               if (!hitNode && selected) {
                 // Clicked on empty space: deselect so rotation resumes!
@@ -737,6 +799,101 @@ function paint3DAtomGraph(
     ctx.fillStyle = targetNode.id === selectedId ? "#FFFFFF" : "#0D0D0C";
     ctx.fillText(labelText, lx, ly - 4);
   }
+}
+
+function drawAgentOverlay(
+  ctx: CanvasRenderingContext2D,
+  bodies: Node3D[],
+  suggestions: AgentSuggestion[],
+  inferred: InferredLink[],
+  openId: string | null,
+  selectedId: string | null,
+  glow: number,
+  reduce: boolean,
+  hits: AgentHit[]
+) {
+  hits.length = 0;
+  const byId = new Map(bodies.map((body) => [body.id, body]));
+  ctx.save();
+  ctx.lineJoin = "round";
+  for (const link of inferred) {
+    const a = byId.get(link.source);
+    const b = byId.get(link.target);
+    if (!a || !b) continue;
+    ctx.save();
+    ctx.strokeStyle = "#FA6610";
+    ctx.lineWidth = 2.2;
+    ctx.shadowColor = "rgba(250, 102, 16, 0.9)";
+    ctx.shadowBlur = 8;
+    ctx.setLineDash([8, 6]);
+    ctx.lineDashOffset = reduce ? 0 : -glow;
+    ctx.beginPath();
+    ctx.moveTo(a.projX, a.projY);
+    ctx.lineTo(b.projX, b.projY);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.setLineDash([]);
+    ctx.font = "600 10px 'Saans', -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.fillStyle = "#FA6610";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("Agent inferred", (a.projX + b.projX) / 2, (a.projY + b.projY) / 2 - 6);
+    ctx.restore();
+  }
+
+  suggestions.forEach((suggestion, index) => {
+    const anchor = byId.get(suggestion.anchorId) || (selectedId ? byId.get(selectedId) : undefined);
+    if (!anchor) return;
+    const ring = suggestion.edgeType === "CONTRADICTS" ? "#FA6610" : suggestion.edgeType === "AMBIGUOUS" ? "#8B5CF6" : "#64748B";
+    const x = anchor.projX + 34;
+    const y = anchor.projY + 28 + index * 48;
+    ctx.save();
+    ctx.strokeStyle = ring;
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash([4, 3]);
+    ctx.lineDashOffset = reduce ? 0 : -glow;
+    ctx.beginPath();
+    ctx.arc(x, y, 13, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.beginPath();
+    ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    const caption = `Suggested by Comma Agent: ${suggestion.label}${suggestion.amount ? ` · $${suggestion.amount}` : ""}`;
+    ctx.font = "600 11px 'Saans', -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#0D0D0C";
+    ctx.fillText(caption, x + 18, y);
+    hits.push({ kind: "ghost", id: suggestion.id, x: x - 14, y: y - 14, w: ctx.measureText(caption).width + 36, h: 28 });
+    if (openId === suggestion.id) {
+      drawChip(ctx, x + 18, y + 12, 72, "Approve", true);
+      drawChip(ctx, x + 96, y + 12, 72, "Dismiss", false);
+      hits.push({ kind: "approve", id: suggestion.id, x: x + 18, y: y + 12, w: 72, h: 20 });
+      hits.push({ kind: "dismiss", id: suggestion.id, x: x + 96, y: y + 12, w: 72, h: 20 });
+    }
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
+function drawChip(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, label: string, filled: boolean) {
+  ctx.save();
+  ctx.fillStyle = filled ? "#0D0D0C" : "#FFFFFF";
+  ctx.strokeStyle = filled ? "#0D0D0C" : "#E7DDD2";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, 20, 5);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = filled ? "#FFFFFF" : "#0D0D0C";
+  ctx.font = "600 11px 'Saans', -apple-system, BlinkMacSystemFont, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, x + width / 2, y + 10);
+  ctx.restore();
 }
 
 function getNodeColor(node?: GraphNode | { group: string }): string {
