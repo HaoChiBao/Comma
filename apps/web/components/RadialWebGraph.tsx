@@ -485,7 +485,7 @@ export function RadialWebGraph({
   // Those ids are absent from the new map, so their captions fall back to the raw id.
   useEffect(() => {
     if (nodes.length === 0 || !rootId || nodeMap.has(rootId)) return;
-    setRootId(null);
+    setRootId("");
     setVisibleIds(new Set());
     setOpenSet(new Set());
     setTreeParents(new Map());
