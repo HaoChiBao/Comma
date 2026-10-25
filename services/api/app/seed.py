@@ -1,16 +1,33 @@
 from datetime import datetime, timezone
-from uuid import uuid4
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AccessGrant, Actor, ArtifactVersion, Case, Fact, GraphEdge, Organization, SourceArtifact
-from app.seed_data import JORDAN, MAYA, ORG, ORG_BETA, RILEY, world
+from app.models import AccessGrant, Actor, ArtifactVersion, Case, CellSourceLink, Fact, GraphEdge, Organization, SourceArtifact, WorkbookCell
+from app.seed_data import (
+    JORDAN,
+    MAYA,
+    ORG,
+    ORG_BETA,
+    RILEY,
+    WORKBOOK_CASE,
+    WORKBOOK_ID,
+    WORKBOOK_PERIOD,
+    WORKBOOK_SHEET,
+    workbook_world,
+    world,
+)
+from app.temporal import utc
 
 
 def seed(db: Session) -> None:
-    if db.scalar(select(Organization.id).limit(1)):
-        return
+    if not db.scalar(select(Organization.id).limit(1)):
+        _seed_world(db)
+    seed_workbook(db)
+
+
+def _seed_world(db: Session) -> None:
     db.add_all(
         [
             Organization(id=ORG, name="Acme Corp"),
@@ -27,6 +44,59 @@ def seed(db: Session) -> None:
     )
     db.flush()
     versions, cases = world()
+    _add_versions(db, versions)
+    for case in cases:
+        _add_case(db, case)
+    db.commit()
+
+
+def seed_workbook(db: Session) -> None:
+    """Adds the Excel demo case. Runs on an existing database too, once."""
+    if db.get(Case, WORKBOOK_CASE) is not None:
+        return
+    versions, case, cells, links = workbook_world()
+    _add_versions(db, versions)
+    _add_case(db, case)
+    db.flush()
+    for cell in cells:
+        db.add(
+            WorkbookCell(
+                id=cell_id(WORKBOOK_ID, WORKBOOK_SHEET, cell["address"]),
+                organization_id=ORG,
+                workbook_id=WORKBOOK_ID,
+                case_id=WORKBOOK_CASE,
+                sheet_name=WORKBOOK_SHEET,
+                address=cell["address"],
+                value_json={"amount": cell["value"]},
+                formula=cell["formula"],
+                period=WORKBOOK_PERIOD,
+                currency="USD",
+                vendor_name=cell["vendor_name"],
+                vendor_ref=cell["vendor_ref"],
+                reference=cell["reference"],
+            )
+        )
+    db.flush()
+    for address, fact_id, relationship, status, basis in links:
+        db.add(
+            CellSourceLink(
+                id=f"link-{address}-{fact_id}",
+                cell_id=cell_id(WORKBOOK_ID, WORKBOOK_SHEET, address),
+                fact_id=fact_id,
+                relationship_type=relationship,
+                status=status,
+                confidence="high" if status == "verified" else "medium",
+                basis=basis,
+            )
+        )
+    db.commit()
+
+
+def cell_id(workbook_id: str, sheet_name: str, address: str) -> str:
+    return f"{workbook_id}:{sheet_name}!{address}"
+
+
+def _add_versions(db: Session, versions: list[dict]) -> None:
     artifacts: dict[str, SourceArtifact] = {}
     now = datetime.now(timezone.utc)
     for item in versions:
@@ -60,6 +130,7 @@ def seed(db: Session) -> None:
                 "case_ids": item["case_ids"],
                 "entity_ref": item["entity_ref"],
                 "formula": item["formula"],
+                "period": item["period"],
             },
         )
         db.add(version)
@@ -69,8 +140,8 @@ def seed(db: Session) -> None:
                     id=f"grant-{item['version_id']}-{role}",
                     artifact_version_id=item["version_id"],
                     role=role,
-                    grant_from=start if hasattr(start, "tzinfo") else __import__("app.temporal", fromlist=["utc"]).utc(start),
-                    grant_to=end if end is None or hasattr(end, "tzinfo") else __import__("app.temporal", fromlist=["utc"]).utc(end),
+                    grant_from=start if hasattr(start, "tzinfo") else utc(start),
+                    grant_to=end if end is None or hasattr(end, "tzinfo") else utc(end),
                     permission="read",
                 )
             )
@@ -82,9 +153,23 @@ def seed(db: Session) -> None:
                     fact_type=item["fact_type"],
                     entity_ref=item["entity_ref"],
                     amount_decimal=item["amount"],
-                    currency="USD",
+                    currency=item["currency"],
                     value_text=item["content_text"][:240],
                     source_locator=item["locator"],
+                    extraction_status="seeded",
+                )
+            )
+        for fact_id, amount, locator in item["extra_facts"]:
+            db.add(
+                Fact(
+                    id=fact_id,
+                    artifact_version_id=item["version_id"],
+                    fact_type="line_amount",
+                    entity_ref=item["entity_ref"],
+                    amount_decimal=Decimal(amount),
+                    currency=item["currency"],
+                    value_text=f"{locator} {amount}",
+                    source_locator=locator,
                     extraction_status="seeded",
                 )
             )
@@ -94,7 +179,7 @@ def seed(db: Session) -> None:
                 artifact_version_id=item["version_id"],
                 fact_type="unit_price",
                 entity_ref=item["entity_ref"],
-                amount_decimal=item["amount"] and __import__("decimal").Decimal("10.00"),
+                amount_decimal=item["amount"] and Decimal("10.00"),
                 currency="USD",
                 value_text="10.00",
                 source_locator="unit price",
@@ -105,7 +190,7 @@ def seed(db: Session) -> None:
                 artifact_version_id=item["version_id"],
                 fact_type="quantity",
                 entity_ref=item["entity_ref"],
-                amount_decimal=__import__("decimal").Decimal("8"),
+                amount_decimal=Decimal("8"),
                 currency="USD",
                 value_text="8",
                 source_locator="quantity",
@@ -138,24 +223,26 @@ def seed(db: Session) -> None:
                     created_at=now,
                 )
             )
-    for case_id, case_type, artifact_id, version_id, summary, entity, amount, probes in cases:
-        db.add(
-            Case(
-                id=case_id,
-                organization_id=ORG,
-                case_type=case_type,
-                decision_artifact_id=artifact_id,
-                decision_version_id=version_id,
-                decision_at=__import__("app.temporal", fromlist=["utc"]).utc("2025-09-30T23:59:00+00:00"),
-                summary=summary,
-                status="open",
-                vendor_name=summary.split(" ")[0] if False else _vendor(case_id),
-                entity_ref=entity,
-                recorded_amount=__import__("decimal").Decimal(amount),
-                probe_version_ids=probes,
-            )
+
+
+def _add_case(db: Session, case: tuple) -> None:
+    case_id, case_type, artifact_id, version_id, summary, entity, amount, probes = case
+    db.add(
+        Case(
+            id=case_id,
+            organization_id=ORG,
+            case_type=case_type,
+            decision_artifact_id=artifact_id,
+            decision_version_id=version_id,
+            decision_at=utc("2025-09-30T23:59:00+00:00"),
+            summary=summary,
+            status="open",
+            vendor_name=_vendor(case_id),
+            entity_ref=entity,
+            recorded_amount=Decimal(amount),
+            probe_version_ids=probes,
         )
-    db.commit()
+    )
 
 
 def _vendor(case_id: str) -> str:
@@ -170,6 +257,7 @@ def _vendor(case_id: str) -> str:
         "CASE-008": "Apex Freight",
         "CASE-009": "Cloud Services Inc.",
         "CASE-010": "Cloud Services Inc.",
+        "CASE-011": "Cloud Services Inc.",
     }[case_id]
 
 

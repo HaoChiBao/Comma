@@ -38,7 +38,7 @@ cd services/api
 python -m pytest
 ```
 
-The tests cover temporal filtering, version selection, role grants, cross-organization denial, search and graph leakage, the blocked future invoice, approval authority, and the unsafe baseline.
+The tests cover temporal filtering, version selection, role grants, cross-organization denial, search and graph leakage, the blocked future invoice, approval authority, the unsafe baseline, and the Excel cell traces.
 
 ## Demo
 
@@ -50,6 +50,58 @@ The tests cover temporal filtering, version selection, role grants, cross-organi
 6. Approve or reject the proposal as the auditor. An accountant cannot approve.
 
 The walkthrough is in `docs/DEMO_SCRIPT.md`. Limits are in `docs/ARCHITECTURE.md`.
+
+## Excel add-in
+
+`apps/excel-addin` is a WorldState task pane for Excel. It uses Office.js with React and TypeScript, and it is sideloaded rather than published. Select a cell and click **Inspect**. The pane shows:
+
+- the value and formula
+- the direct precedents (from Office.js `getDirectPrecedents`, ExcelApi 1.12)
+- the linked source documents
+- a Review / Unknown / Supported finding
+
+The as-of selector re-runs the trace against a snapshot. A source that arrived later comes back as "withheld", with no content or amount. **Scan range** highlights flagged cells. **Clear WorldState highlights** restores the original fills. The add-in never writes values or formulas.
+
+The demo workbook is generated from the same rows the API seeds:
+
+```bash
+pip install openpyxl
+PYTHONPATH=services/api python fixtures/build_workbook.py   # writes fixtures/WorldState_Demo.xlsx
+```
+
+Run the API on port 8000 (see Run above), then:
+
+```bash
+cd apps/excel-addin
+npm install
+npm run dev-server        # https://localhost:3001, proxies /v1 and /health to http://localhost:8000
+npm start                 # sideloads manifest.xml into desktop Excel
+```
+
+For Excel on the web:
+1. Upload `WorldState_Demo.xlsx` to OneDrive or SharePoint.
+2. Run `npm run start -- web --document <workbook URL>`, or use **Insert → Add-ins → Upload My Add-in** with `manifest.xml`.
+
+The first `npm run dev-server` installs a local development certificate (`office-addin-dev-certs`). Stop sideloading with `npm run stop`.
+
+Authentication is in demo mode. The pane sends no credentials. The API traces as the seeded accountant, `actor-maya`, unless the request names another `actor_id`. Organization, availability, and role checks still run on the server for every trace and every source read.
+
+Cell endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/traces/inspect` | Cell context plus `as_of` → status, lineage, evidence, unknowns |
+| `POST /v1/workbooks/scan` | Up to 200 cells → per-cell findings |
+| `GET /v1/traces/{trace_id}/graph` | Nodes and typed edges for the trace |
+| `GET /v1/sources/{source_id}?trace_id=` | Source text. Only works if the source is in that trace's snapshot. Otherwise 403. |
+
+Errors return `{code, message, request_id}`. `fixtures/truth.json` lists the planted flags and controls. `services/api/tests/test_workbook.py` checks the scan against it.
+
+Tests:
+- `cd apps/excel-addin && npm test`
+- `cd services/api && python -m pytest tests/test_workbook.py`
+
+Reset: delete `services/api/worldstate.db` and restart the API. The workbook case `CASE-011` is also added to an existing database on startup. In Excel, click **Clear WorldState highlights**.
 
 ## Document ingestion
 
