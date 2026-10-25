@@ -9,14 +9,60 @@ import { clearHighlight, clearHighlights, markCells, settingsStore } from "./off
 import { NotesUnsupportedError, clearNotes, noteSettingsStore, supportsNotes, writeCustomNote, writeFindingNotes, type NoteFinding, type NoteResult } from "./office/notes";
 import { readPrecedents, readSelectedCell, readSelectedRange, readSelection, readUsedRange, readWorkbookId, selectCell, supportsPrecedents, watchSelection, type RangeCells, type SelectionSummary } from "./office/selection";
 import { createClient, describeError } from "./services/worldstateApi";
-import type { Actor, InspectRequest, ScanFinding, ScanResult, SourceDetail, Trace, TraceGraph } from "./types";
-import { COMPANY_ORG, DEFAULT_ACTOR, REASON_LABEL, formatDate } from "./view";
+import type { Actor, AvailableEvidence, InspectRequest, ScanFinding, ScanResult, SourceDetail, Trace, TraceGraph } from "./types";
+import { COMPANY_ORG, DEFAULT_ACTOR, REASON_LABEL, formatDate, formatMoney } from "./view";
 import { AS_OF_PRESETS, LOADING_MS, asOfPreset, defaultSelection, loadingDone, loadingStep } from "./sidebarView";
 import { toSidebarTrace } from "./sidebarPresentation";
 
 const client = createClient();
 type Phase = "idle" | "loading" | "done";
 type DisplayFinding = ScanFinding & { vendor_name?: string };
+const VENDOR_EMAIL_FALLBACK = "nathan.wan23@gmail.com";
+
+function vendorEmail(trace: Trace): string {
+  const emails = trace.evidence.filter((item): item is AvailableEvidence => item.status === "available" && item.kind === "email");
+  for (const item of emails) {
+    const from = /^From:\s*([^\r\n]+)/im.exec(item.snippet)?.[1];
+    const address = from?.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
+    if (address && !/\.(example|test|invalid|localhost)$/i.test(address.split("@")[1])) return address;
+  }
+  return VENDOR_EMAIL_FALLBACK;
+}
+
+function vendorEmailDraft(trace: Trace): { recipient: string; subject: string; body: string } {
+  const vendor = trace.cell.vendor_name || "the vendor";
+  const amount = typeof trace.cell.raw_value === "number"
+    ? formatMoney(trace.cell.raw_value)
+    : trace.cell.display_text || String(trace.cell.raw_value ?? "—");
+  const evidence = trace.evidence
+    .filter((item): item is AvailableEvidence => item.status === "available" && item.cell === trace.cell.key)
+    .map((item) => {
+      const amountText = item.amount ? `, ${formatMoney(item.amount, item.currency)}` : "";
+      const receivedText = item.available_at ? `, received ${formatDate(item.available_at)}` : "";
+      return `- ${item.external_id} (${item.kind}${amountText}${receivedText})`;
+    });
+  const period = trace.cell.period ? `\nPeriod: ${trace.cell.period}` : "";
+  const difference = trace.difference ? `\nDifference: ${formatMoney(trace.difference.amount, trace.difference.currency)}` : "";
+  const evidenceText = evidence.length ? evidence.join("\n") : "- No supporting documents were available in this view.";
+  const subject = `Question about ${vendor} — ${trace.cell.address} (${amount})`;
+  const body = [
+    `Hello ${vendor},`,
+    "",
+    "Could you help us confirm the amount recorded for this item?",
+    `Workbook cell: ${trace.cell.key}`,
+    `Recorded amount: ${amount}${period}`,
+    `Formula: ${trace.cell.formula || "—"}`,
+    `Finding: ${trace.title}`,
+    `Details: ${trace.summary}${difference}`,
+    `Snapshot date: ${formatDate(trace.as_of)}`,
+    "",
+    "Available evidence:",
+    evidenceText,
+    "",
+    "Could you confirm the correct amount and applicable period?",
+  ].join("\n");
+  return { recipient: vendorEmail(trace), subject, body };
+}
 
 function describeNotes(result: NoteResult): string {
   const parts = [];
@@ -298,6 +344,22 @@ export function App() {
     if (trace) setSource(await client.source(sourceId, trace.trace_id));
   });
   const act = (label: string) => {
+    if (label === "Ask vendor" && trace) {
+      const draft = vendorEmailDraft(trace);
+      const mailto = `mailto:${encodeURIComponent(draft.recipient)}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
+      const link = document.createElement("a");
+      link.href = mailto;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      showNotice(draft.recipient === VENDOR_EMAIL_FALLBACK
+        ? `Email draft opened to ${draft.recipient}; no vendor email was available.`
+        : `Email draft opened to ${draft.recipient}.`);
+      return;
+    }
     if (label !== "Mark reviewed" || !trace) {
       showNotice(`${label} · not saved yet`);
       return;
