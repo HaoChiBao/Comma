@@ -1,20 +1,22 @@
 import * as React from "react";
-import { CellCard } from "./components/CellCard";
-import { EvidenceList } from "./components/EvidenceList";
-import { FindingCard } from "./components/FindingCard";
-import { LineageGraph } from "./components/LineageGraph";
+import { AsOfMenu } from "./components/AsOfMenu";
+import { IdleView } from "./components/IdleView";
+import { LoadingView } from "./components/LoadingView";
+import { ResultView } from "./components/ResultView";
 import { ScanResults } from "./components/ScanResults";
 import { SourcePanel } from "./components/SourcePanel";
 import { clearHighlights, markCells, settingsStore } from "./office/formatting";
 import { NotesUnsupportedError, clearNotes, noteSettingsStore, supportsNotes, writeFindingNotes, type NoteFinding, type NoteResult } from "./office/notes";
-import { readPrecedents, readSelectedCell, readSelectedRange, readWorkbookId, selectCell, supportsPrecedents } from "./office/selection";
+import { readPrecedents, readSelectedCell, readSelectedRange, readSelection, readUsedRange, readWorkbookId, selectCell, supportsPrecedents, watchSelection, type RangeCells, type SelectionSummary } from "./office/selection";
 import { createClient, describeError } from "./services/worldstateApi";
-import type { Actor, GraphNode, InspectRequest, ScanResult, SourceDetail, Trace, TraceGraph } from "./types";
-import { AS_OF_PRESETS, COMPANY_ORG, DEFAULT_ACTOR, REASON_LABEL, formatDate } from "./view";
+import type { Actor, InspectRequest, ScanFinding, ScanResult, SourceDetail, Trace, TraceGraph } from "./types";
+import { COMPANY_ORG, DEFAULT_ACTOR, REASON_LABEL, formatDate } from "./view";
+import { AS_OF_PRESETS, LOADING_MS, asOfPreset, defaultSelection, loadingDone, loadingStep } from "./sidebarView";
+import { toSidebarTrace } from "./sidebarPresentation";
 
 const client = createClient();
-
-type Inspected = { request: InspectRequest; precedentsSupported: boolean };
+type Phase = "idle" | "loading" | "done";
+type DisplayFinding = ScanFinding & { vendor_name?: string };
 
 function describeNotes(result: NoteResult): string {
   const parts = [];
@@ -24,35 +26,50 @@ function describeNotes(result: NoteResult): string {
   return parts.length ? ` Notes: ${parts.join(", ")}. Hover a flagged cell to read it.` : "";
 }
 
+function withVendor(findings: ScanFinding[], cells: RangeCells["cells"]): DisplayFinding[] {
+  const values = new Map(cells.map((cell) => [cell.address, cell.raw_value]));
+  return findings.map((finding) => {
+    const row = /([0-9]+)$/.exec(finding.address)?.[1];
+    const vendor = row ? values.get(`B${row}`) : undefined;
+    return { ...finding, vendor_name: typeof vendor === "string" ? vendor : undefined };
+  });
+}
+
 export function App() {
   const [asOf, setAsOf] = React.useState(AS_OF_PRESETS[0].value);
   const [actors, setActors] = React.useState<Actor[]>([]);
   const [actorId, setActorId] = React.useState(DEFAULT_ACTOR);
   const [backend, setBackend] = React.useState<"checking" | "ready" | "down">("checking");
+  const [phase, setPhase] = React.useState<Phase>("idle");
+  const [step, setStep] = React.useState(0);
+  const [selection, setSelection] = React.useState<SelectionSummary | null>(null);
+  const [trace, setTrace] = React.useState<Trace | null>(null);
+  const [graph, setGraph] = React.useState<TraceGraph | null>(null);
+  const [request, setRequest] = React.useState<InspectRequest | null>(null);
+  const [traceVendor, setTraceVendor] = React.useState("");
+  const [selectedItem, setSelectedItem] = React.useState("");
+  const [flagged, setFlagged] = React.useState<DisplayFinding[] | null>(null);
+  const [scanResult, setScanResult] = React.useState<ScanResult | null>(null);
+  const [scanNote, setScanNote] = React.useState<string | null>(null);
+  const [source, setSource] = React.useState<SourceDetail | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
-  const [inspected, setInspected] = React.useState<Inspected | null>(null);
-  const [trace, setTrace] = React.useState<Trace | null>(null);
-  const [showGraph, setShowGraph] = React.useState(false);
-  const [graph, setGraph] = React.useState<TraceGraph | null>(null);
-  const [source, setSource] = React.useState<SourceDetail | null>(null);
-  const [scan, setScan] = React.useState<ScanResult | null>(null);
 
-  React.useEffect(() => {
-    client
-      .health()
-      .then(() => setBackend("ready"))
-      .catch(() => setBackend("down"));
-    client
-      .actors()
-      .then((all) => setActors(all.filter((actor) => actor.organization_id === COMPANY_ORG)))
-      .catch(() => setActors([]));
-  }, []);
-
+  const token = React.useRef(0);
+  const phaseRef = React.useRef<Phase>("idle");
+  const traceRef = React.useRef<Trace | null>(null);
+  const requestRef = React.useRef<InspectRequest | null>(null);
+  const filtersRef = React.useRef({ asOf, actorId });
+  phaseRef.current = phase;
+  traceRef.current = trace;
+  requestRef.current = request;
+  filtersRef.current = { asOf, actorId };
+  const preset = asOfPreset(asOf);
   const actor = actors.find((item) => item.id === actorId);
+
   const noteContext = () => ({
-    asOfLabel: AS_OF_PRESETS.find((preset) => preset.value === asOf)?.label ?? formatDate(asOf),
+    asOfLabel: AS_OF_PRESETS.find((item) => item.value === asOf)?.label ?? formatDate(asOf),
     actorLabel: actor ? `${actor.name} (${actor.role})` : actorId,
   });
 
@@ -62,17 +79,60 @@ export function App() {
     return describeNotes(await writeFindingNotes(context, findings, noteSettingsStore(), noteContext()));
   }
 
+  const refreshFlags = React.useCallback(async (date: string, actor: string) => {
+    try {
+      const result = await Excel.run(async (context) => {
+        const workbookId = await readWorkbookId(context);
+        const range = await readUsedRange(context);
+        if (!range) return { result: null, range: null };
+        const scan = await client.scan({ workbook_id: workbookId, sheet_name: range.sheetName, range_address: range.rangeAddress, cells: range.cells, as_of: date, actor_id: actor });
+        return { result: scan, range };
+      });
+      if (result.result && result.range) {
+        setFlagged(withVendor(result.result.findings, result.range.cells));
+        setScanNote(null);
+        setBackend("ready");
+      } else {
+        setFlagged([]);
+      }
+    } catch (err) {
+      setFlagged(null);
+      setScanNote(describeError(err));
+      if (/not reachable/i.test(describeError(err))) setBackend("down");
+    }
+  }, []);
+
   React.useEffect(() => {
-    if (!showGraph || !trace) return;
-    let live = true;
-    client
-      .graph(trace.trace_id)
-      .then((result) => live && setGraph(result))
-      .catch((err) => live && setError(describeError(err)));
-    return () => {
-      live = false;
+    client.health().then(() => setBackend("ready")).catch(() => setBackend("down"));
+    client.actors().then((all) => setActors(all.filter((item) => item.organization_id === COMPANY_ORG))).catch(() => setActors([]));
+    void refreshFlags(asOf, actorId);
+    const refreshSelection = async () => {
+      try {
+        const next = await Excel.run((context) => readSelection(context));
+        setSelection(next);
+        const current = traceRef.current;
+        const key = next.single ? next.cell.key : null;
+        if (phaseRef.current === "loading" || (phaseRef.current === "done" && current && key !== current.cell.key)) {
+          token.current += 1;
+          setPhase("idle");
+          setTrace(null);
+          setGraph(null);
+          setSource(null);
+        }
+      } catch {
+        // Excel can reject a read briefly while a cell is being edited; the next selection event retries it.
+      }
     };
-  }, [showGraph, trace]);
+    void refreshSelection();
+    let stop: (() => Promise<void>) | null = null;
+    watchSelection(() => {
+      void refreshSelection();
+      void refreshFlags(filtersRef.current.asOf, filtersRef.current.actorId);
+    }).then((remove) => { stop = remove; }).catch(() => undefined);
+    return () => { if (stop) void stop(); };
+    // The event listener is registered once; explicit handlers pass current filter values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function run(label: string, task: () => Promise<void>) {
     setBusy(label);
@@ -87,194 +147,172 @@ export function App() {
     }
   }
 
-  async function runTrace(request: InspectRequest) {
-    const result = await client.inspect(request);
-    setTrace(result);
-    setGraph(null);
-    setSource(null);
-    setBackend("ready");
+  async function inspectWith(requestBody: InspectRequest, vendor = "") {
+    const mine = ++token.current;
+    setPhase("loading");
+    setStep(0);
+    setError(null);
+    const started = performance.now();
+    let real: 0 | 1 | 2 = 0;
+    const timer = window.setInterval(() => { if (token.current === mine) setStep(loadingStep(performance.now() - started, real)); }, 60);
+    try {
+      const result = await client.inspect(requestBody);
+      real = 1;
+      const graphResult = await client.graph(result.trace_id);
+      real = 2;
+      while (!loadingDone(performance.now() - started, real)) {
+        await new Promise((resolve) => setTimeout(resolve, Math.max(16, LOADING_MS - (performance.now() - started))));
+      }
+      if (token.current !== mine) return;
+      setRequest(requestBody);
+      setTraceVendor(vendor);
+      setTrace(result);
+      setGraph(graphResult);
+      setSelectedItem(defaultSelection(toSidebarTrace(result, graphResult, requestBody)));
+      setSource(null);
+      setPhase("done");
+      setBackend("ready");
+    } catch (err) {
+      if (token.current === mine) {
+        setError(describeError(err));
+        setPhase("idle");
+      }
+    } finally {
+      window.clearInterval(timer);
+    }
   }
 
-  const inspect = () =>
-    run("Inspecting", async () => {
-      const read = await Excel.run(async (context) => {
-        const workbookId = await readWorkbookId(context);
-        const cell = await readSelectedCell(context);
-        const supported = supportsPrecedents();
-        const precedents = await readPrecedents(context, cell, supported);
-        return { workbookId, cell, precedents };
-      });
-      const request: InspectRequest = {
-        workbook_id: read.workbookId,
-        sheet_name: read.cell.sheetName,
-        cell_address: read.cell.address,
-        raw_value: read.cell.rawValue,
-        display_text: read.cell.displayText,
-        formula: read.cell.formula,
-        direct_precedents: read.precedents.addresses,
-        precedent_values: read.precedents.values,
-        as_of: asOf,
-        actor_id: actorId,
-      };
-      setInspected({ request, precedentsSupported: read.precedents.supported });
-      await runTrace(request);
+  const inspect = () => run("Inspecting", async () => {
+    const read = await Excel.run(async (context) => {
+      const workbookId = await readWorkbookId(context);
+      const cell = await readSelectedCell(context);
+      const precedents = await readPrecedents(context, cell, supportsPrecedents());
+      const summary = await readSelection(context);
+      return { workbookId, cell, precedents, vendor: summary.single ? summary.vendor : "" };
     });
+    await inspectWith({
+      workbook_id: read.workbookId,
+      sheet_name: read.cell.sheetName,
+      cell_address: read.cell.address,
+      raw_value: read.cell.rawValue,
+      display_text: read.cell.displayText,
+      formula: read.cell.formula,
+      direct_precedents: read.precedents.addresses,
+      precedent_values: read.precedents.values,
+      as_of: asOf,
+      actor_id: actorId,
+    }, read.vendor);
+  });
 
-  const retrace = (changes: Partial<InspectRequest>) => {
-    if (!inspected) return;
-    const request = { ...inspected.request, ...changes };
-    setInspected({ ...inspected, request });
-    void run("Re-checking evidence", () => runTrace(request));
+  const retrace = (changes: Partial<InspectRequest>, newAsOf = asOf, newActor = actorId) => {
+    const previous = requestRef.current;
+    if (!previous) return;
+    void run("Re-checking evidence", () => inspectWith({ ...previous, ...changes, as_of: newAsOf, actor_id: newActor }, traceVendor));
   };
 
   const changeAsOf = (value: string) => {
     setAsOf(value);
-    retrace({ as_of: value });
+    void refreshFlags(value, actorId);
+    retrace({ as_of: value }, value, actorId);
   };
 
   const changeActor = (value: string) => {
     setActorId(value);
-    retrace({ actor_id: value });
+    void refreshFlags(asOf, value);
+    retrace({ actor_id: value }, asOf, value);
   };
 
-  const scanRange = () =>
-    run("Scanning", async () => {
-      await Excel.run(async (context) => {
-        const workbookId = await readWorkbookId(context);
-        const range = await readSelectedRange(context);
-        const result = await client.scan({
-          workbook_id: workbookId,
-          sheet_name: range.sheetName,
-          range_address: range.rangeAddress,
-          cells: range.cells,
-          as_of: asOf,
-          actor_id: actorId,
-        });
-        const marked = await markCells(
-          context,
-          result.findings.map((item) => ({ key: item.cell, status: item.status })),
-          settingsStore(),
-        );
-        setScan(result);
-        const notes = await addNotes(
-          context,
-          result.findings.map((item) => ({ key: item.cell, status: item.status, title: item.title, summary: item.summary, difference: item.difference })),
-        );
-        setNotice((marked ? `Highlighted ${marked} cell(s). Values were not changed.` : "Nothing to highlight.") + notes);
-      });
+  const scanRange = () => run("Scanning selection", async () => {
+    await Excel.run(async (context) => {
+      const workbookId = await readWorkbookId(context);
+      const range = await readSelectedRange(context);
+      const result = await client.scan({ workbook_id: workbookId, sheet_name: range.sheetName, range_address: range.rangeAddress, cells: range.cells, as_of: asOf, actor_id: actorId });
+      const marked = await markCells(context, result.findings.map((item) => ({ key: item.cell, status: item.status })), settingsStore());
+      setScanResult(result);
+      const notes = await addNotes(context, result.findings.map((item) => ({ key: item.cell, status: item.status, title: item.title, summary: item.summary, difference: item.difference })));
+      setNotice((marked ? `Highlighted ${marked} cell(s). Values were not changed.` : "Nothing to highlight.") + notes);
     });
+  });
 
-  const clear = () =>
-    run("Clearing", async () => {
-      const [restored, removed] = await Excel.run(async (context) => [
-        await clearHighlights(context, settingsStore()),
-        await clearNotes(context, noteSettingsStore()),
-      ]);
-      const parts = [restored ? `restored the original fill on ${restored} cell(s)` : "", removed ? `removed ${removed} WorldState note(s)` : ""].filter(Boolean);
-      setNotice(parts.length ? `Cleared: ${parts.join(" and ")}.` : "No WorldState highlights or notes to clear.");
-    });
+  const clear = () => run("Clearing", async () => {
+    const [restored, removed] = await Excel.run(async (context) => [
+      await clearHighlights(context, settingsStore()),
+      await clearNotes(context, noteSettingsStore()),
+    ]);
+    const parts = [restored ? `restored the original fill on ${restored} cell(s)` : "", removed ? `removed ${removed} WorldState note(s)` : ""].filter(Boolean);
+    setNotice(parts.length ? `Cleared: ${parts.join(" and ")}.` : "No WorldState highlights or notes to clear.");
+  });
 
-  const noteCurrent = () =>
-    run("Adding note", async () => {
-      if (!trace) return;
-      const finding = { key: trace.cell.key, status: trace.status, title: trace.title, summary: trace.summary, difference: trace.difference };
-      const notes = await Excel.run(async (context) => {
-        await markCells(context, [{ key: finding.key, status: finding.status }], settingsStore());
-        return addNotes(context, [finding]);
-      });
-      setNotice(notes ? notes.trim() : "This cell is supported, so it gets no note.");
+  const noteCurrent = () => run("Adding note", async () => {
+    if (!trace) return;
+    const finding = { key: trace.cell.key, status: trace.status, title: trace.title, summary: trace.summary, difference: trace.difference };
+    const notes = await Excel.run(async (context) => {
+      await markCells(context, [{ key: finding.key, status: finding.status }], settingsStore());
+      return addNotes(context, [finding]);
     });
+    setNotice(notes ? notes.trim() : "This cell is supported, so it gets no note.");
+  });
 
   const goToCell = (key: string) => run("Selecting", () => Excel.run((context) => selectCell(context, key)));
+  const openSource = (sourceId: string) => run("Opening source", async () => {
+    if (trace) setSource(await client.source(sourceId, trace.trace_id));
+  });
+  const act = (label: string) => setNotice(`${label} · not saved yet`);
 
-  const openSource = (sourceId: string) =>
-    run("Opening source", async () => {
-      if (!trace) return;
-      setSource(await client.source(sourceId, trace.trace_id));
-    });
-
-  const selectNode = (node: GraphNode) => {
-    if (node.type === "SpreadsheetCell") void goToCell(node.id);
-    else if (node.type === "Blocked") setNotice(`${REASON_LABEL[node.reason ?? ""] ?? "Withheld"}. Move the date later to see it if it exists.`);
-    else if (node.source_id) void openSource(node.source_id);
-  };
-
-  const custom = !AS_OF_PRESETS.some((preset) => preset.value === asOf);
+  const selectionCell = selection?.single ? selection.cell : null;
+  const sidebarTrace = trace && graph && request ? toSidebarTrace(trace, graph, request) : null;
 
   return (
-    <main>
+    <div className="ws">
       <header className="top">
-        <div className="brand">
-          WorldState <span className={`dot ${backend}`} title={`API ${backend}`} />
-        </div>
-        <div className="actions">
-          <button onClick={inspect} disabled={!!busy}>
-            Inspect
-          </button>
-          <button onClick={scanRange} disabled={!!busy}>
-            Scan range
-          </button>
-          <button onClick={() => setShowGraph((value) => !value)} disabled={!trace}>
-            {showGraph ? "Hide trace" : "Trace"}
-          </button>
+        <span className="brand">WorldState <span className={`dot ${backend}`} title={`API ${backend}`} /></span>
+        <div className="top-controls">
+          <label className="actor-select"><span className="sr-only">Viewing as</span>
+            <select aria-label="Actor" value={actorId} onChange={(event) => changeActor(event.target.value)} disabled={!!busy || !actors.length}>
+              {actors.length ? null : <option value={actorId}>{actorId}</option>}
+              {actors.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.role})</option>)}
+            </select>
+          </label>
+          <AsOfMenu value={asOf} onChange={changeAsOf} />
         </div>
       </header>
 
-      <div className="asof" role="group" aria-label="Viewing as">
-        <span className="muted">Viewing as</span>
-        <select aria-label="Actor" value={actorId} onChange={(event) => changeActor(event.target.value)} disabled={!!busy || !actors.length}>
-          {actors.length ? null : <option value={actorId}>{actorId}</option>}
-          {actors.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name} ({item.role})
-            </option>
-          ))}
-        </select>
+      <div className="scroll">
+        {busy ? <p className="status">{busy}…</p> : null}
+        {error ? <p className="inline-error" role="alert">{error}</p> : null}
+        {notice ? <p className="notice">{notice}</p> : null}
+        {backend === "down" && !error ? <p className="inline-error" role="alert">WorldState API is not reachable. Your workbook was not changed.</p> : null}
+
+        {phase === "idle" ? <IdleView
+          selection={selection}
+          asOfShort={preset.short}
+          flagged={flagged}
+          scanNote={scanNote}
+          error={null}
+          onInspect={() => void inspect()}
+          onPick={(key) => void goToCell(key)}
+        /> : null}
+        {phase === "loading" ? <LoadingView cellKey={selectionCell?.key ?? ""} address={selectionCell?.address ?? ""} asOfShort={preset.short} step={step} /> : null}
+        {phase === "done" && sidebarTrace ? <ResultView
+          trace={sidebarTrace}
+          vendor={traceVendor}
+          selected={selectedItem}
+          onSelect={setSelectedItem}
+          onOpenSource={openSource}
+          onAddNote={() => void noteCurrent()}
+          onAction={act}
+          busy={!!busy}
+        /> : null}
+
+        {scanResult ? <ScanResults result={scanResult} onSelectCell={(key) => void goToCell(key)} /> : null}
+        {source ? <SourcePanel source={source} onClose={() => setSource(null)} /> : null}
       </div>
 
-      <div className="asof" role="group" aria-label="Evidence as of">
-        <span className="muted">As of</span>
-        {AS_OF_PRESETS.map((preset) => (
-          <button key={preset.value} className={`chip ${asOf === preset.value ? "on" : ""}`} onClick={() => changeAsOf(preset.value)} disabled={!!busy}>
-            {preset.label}
-          </button>
-        ))}
-        <input
-          type="date"
-          aria-label="Custom as-of date"
-          className={custom ? "on" : ""}
-          value={custom ? asOf.slice(0, 10) : ""}
-          onChange={(event) => event.target.value && changeAsOf(`${event.target.value}T23:59:59`)}
-        />
-      </div>
-
-      {busy ? <p className="status">{busy}…</p> : null}
-      {error ? <p className="error" role="alert">{error}</p> : null}
-      {notice ? <p className="notice">{notice}</p> : null}
-      {backend === "down" && !error ? <p className="error">WorldState API is not reachable. Start the API and reload this pane.</p> : null}
-
-      {!trace && !scan ? <p className="muted intro">Select a cell, then click Inspect. Select a table, then click Scan range.</p> : null}
-
-      {trace && inspected ? (
-        <>
-          <FindingCard trace={trace} onAddNote={trace.status === "supported" ? undefined : noteCurrent} busy={!!busy} />
-          <CellCard trace={trace} precedentValues={inspected.request.precedent_values} precedentsSupported={inspected.precedentsSupported} onSelectCell={goToCell} />
-          {showGraph && graph ? <LineageGraph graph={graph} onSelectNode={selectNode} /> : null}
-          {source ? <SourcePanel source={source} onClose={() => setSource(null)} /> : null}
-          <EvidenceList trace={trace} onOpenSource={openSource} />
-          <p className="muted mono">
-            snapshot {trace.snapshot_id} · {trace.manifest_hash.slice(0, 12)}
-          </p>
-        </>
-      ) : null}
-
-      {scan ? <ScanResults result={scan} onSelectCell={goToCell} /> : null}
-
-      <footer>
-        <button className="link" onClick={clear} disabled={!!busy}>
-          Clear WorldState highlights and notes
-        </button>
+      <footer className="pane-footer">
+        <button type="button" className="ws-link" onClick={() => void scanRange()} disabled={!!busy}>Scan selection &amp; add notes</button>
+        <button type="button" className="ws-link" onClick={() => void clear()} disabled={!!busy}>Clear WorldState highlights and notes</button>
+        {trace ? <span className="snapshot">Snapshot {trace.manifest_hash.slice(0, 8)}</span> : null}
       </footer>
-    </main>
+    </div>
   );
 }

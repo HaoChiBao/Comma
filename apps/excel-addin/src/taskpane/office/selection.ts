@@ -1,6 +1,6 @@
 // Office.js adapter. Every function takes the request context so it can run against a fake in tests.
 
-export const DEFAULT_WORKBOOK_ID = "demo-accruals-v1";
+export const DEFAULT_WORKBOOK_ID = "decagon-accruals-2025-09";
 export const WORKBOOK_ID_PROPERTY = "WorldStateWorkbookId";
 export const MAX_SCAN_CELLS = 200;
 
@@ -77,7 +77,7 @@ export async function readWorkbookId(context: Excel.RequestContext): Promise<str
     await context.sync();
     if (!property.isNullObject && property.value) return String(property.value);
   } catch {
-    // Custom properties need ExcelApi 1.7; fall back to the demo workbook.
+    // Custom properties need ExcelApi 1.7; fall back to the current Decagon workbook.
   }
   return DEFAULT_WORKBOOK_ID;
 }
@@ -157,6 +157,77 @@ export async function readSelectedRange(context: Excel.RequestContext): Promise<
     }
   }
   return { sheetName: sheet, rangeAddress: range.address, cells };
+}
+
+export type SelectionSummary =
+  | { single: true; cell: SelectedCell; vendor: string }
+  | { single: false; sheetName: string; address: string };
+
+/** Idle-view selection read; multi-cell selections remain valid and are shown without throwing. */
+export async function readSelection(context: Excel.RequestContext): Promise<SelectionSummary> {
+  const range = context.workbook.getSelectedRange();
+  range.load("address,values,text,formulas,rowCount,columnCount,rowIndex,columnIndex");
+  await context.sync();
+  const { sheet, address } = splitAddress(range.address);
+  if (range.rowCount !== 1 || range.columnCount !== 1) return { single: false, sheetName: sheet, address };
+  const formula = String(range.formulas[0][0] ?? "");
+  const cell: SelectedCell = {
+    sheetName: sheet,
+    address,
+    key: `${sheet}!${address}`,
+    rawValue: range.values[0][0],
+    displayText: String(range.text[0][0] ?? ""),
+    formula: formula.startsWith("=") ? formula : "",
+  };
+  // The Decagon accrual workbook stores Vendor in column B.
+  let vendor = "";
+  if (range.rowIndex > 0) {
+    const vendorCell = context.workbook.worksheets.getItem(sheet).getRange(`B${range.rowIndex + 1}`);
+    vendorCell.load("text");
+    await context.sync();
+    vendor = String(vendorCell.text[0][0] ?? "");
+  }
+  return { single: true, cell, vendor };
+}
+
+/** Bounded active-sheet scan used to populate the idle view. It does not format cells or write notes. */
+export async function readUsedRange(context: Excel.RequestContext): Promise<RangeCells | null> {
+  const sheet = context.workbook.worksheets.getActiveWorksheet();
+  const used = sheet.getUsedRangeOrNullObject(true);
+  used.load("address,rowCount,columnCount");
+  sheet.load("name");
+  await context.sync();
+  if (used.isNullObject || !used.columnCount) return null;
+  const rows = Math.max(1, Math.min(used.rowCount, Math.floor(MAX_SCAN_CELLS / used.columnCount)));
+  const bounded = used.getResizedRange(rows - used.rowCount, 0);
+  bounded.load("address,values,formulas,rowCount,columnCount,rowIndex,columnIndex");
+  await context.sync();
+  const cells: RangeCells["cells"] = [];
+  for (let r = 0; r < bounded.rowCount; r++) {
+    for (let c = 0; c < bounded.columnCount; c++) {
+      const value = bounded.values[r][c];
+      if (value === "" || value === null) continue;
+      const formula = String(bounded.formulas[r][c] ?? "");
+      cells.push({ address: `${columnName(bounded.columnIndex + c)}${bounded.rowIndex + r + 1}`, raw_value: value, formula: formula.startsWith("=") ? formula : "" });
+    }
+  }
+  return { sheetName: sheet.name, rangeAddress: bounded.address, cells };
+}
+
+export async function watchSelection(onChange: () => void): Promise<() => Promise<void>> {
+  let handler: OfficeExtension.EventHandlerResult<Excel.SelectionChangedEventArgs> | null = null;
+  await Excel.run(async (context) => {
+    handler = context.workbook.onSelectionChanged.add(async () => { onChange(); });
+    await context.sync();
+  });
+  return async () => {
+    if (!handler) return;
+    const registered = handler;
+    await Excel.run(registered.context, async (context) => {
+      registered.remove();
+      await context.sync();
+    });
+  };
 }
 
 export async function selectCell(context: Excel.RequestContext, key: string): Promise<void> {

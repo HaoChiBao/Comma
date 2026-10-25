@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { REVIEW_FILL, UNKNOWN_FILL, clearHighlights, markCells, memoryStore } from "../src/taskpane/office/formatting";
-import { SelectionError, expandAddress, readPrecedents, readSelectedCell, readSelectedRange, splitAddress } from "../src/taskpane/office/selection";
+import { SelectionError, expandAddress, readPrecedents, readSelectedCell, readSelectedRange, readSelection, readUsedRange, splitAddress } from "../src/taskpane/office/selection";
 import { FakeExcel } from "./fakeExcel";
 
 function demo() {
@@ -80,6 +80,28 @@ describe("selection adapter", () => {
     const excel = demo();
     excel.selection = "Accruals!A1:J21";
     await expect(readSelectedRange(excel.context())).rejects.toThrow(/at most 200/);
+  });
+
+  it("reads the Decagon vendor from column B and reports the current cell", async () => {
+    const excel = new FakeExcel({
+      "Accruals!B2": { value: "Cloud Services Inc." },
+      "Accruals!F2": { value: 150, text: "$150.00" },
+    });
+    excel.selection = "Accruals!F2";
+    const selection = await readSelection(excel.context());
+    expect(selection).toMatchObject({ single: true, vendor: "Cloud Services Inc.", cell: { key: "Accruals!F2", rawValue: 150 } });
+  });
+
+  it("reads a bounded active used range for the S2c flagged list", async () => {
+    const excel = new FakeExcel({
+      "Accruals!A1": { value: "Case" },
+      "Accruals!B2": { value: "Cloud Services Inc." },
+      "Accruals!F2": { value: 150 },
+    });
+    excel.usedRange = "A1:H2";
+    const range = await readUsedRange(excel.context());
+    expect(range?.rangeAddress).toBe("Accruals!A1:H2");
+    expect(range?.cells.map((cell) => cell.address)).toEqual(["A1", "B2", "F2"]);
   });
 });
 
