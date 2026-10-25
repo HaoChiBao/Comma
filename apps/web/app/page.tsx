@@ -169,7 +169,7 @@ export default function HomePage() {
         {/* Left: Brand & Scope */}
         <div className="floating-glass">
           <a href="/" className="brand-title" style={{ padding: "0 4px", display: "inline-flex", alignItems: "center" }}>
-            <img src="/comma-logo.png" alt="Comma" className="brand-logo-img" style={{ height: "24px", width: "auto" }} />
+            <img src="/comma-logo.png" alt="Comma" className="brand-logo-img" style={{ height: "30px", width: "auto" }} />
           </a>
 
           <div className="presets" role="group" aria-label="As of date">
