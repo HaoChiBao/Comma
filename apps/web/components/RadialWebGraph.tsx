@@ -5,14 +5,13 @@ import type { GraphEdge, GraphNode } from "@/lib/api";
 
 type Point = { x: number; y: number };
 
-type RadialNode = {
+type WebNode = {
   id: string;
   type: string;
   label: string;
   amount: string | null;
   title?: string;
   depth: number;
-  theta: number;
   x: number;
   y: number;
   parentId: string | null;
@@ -56,20 +55,32 @@ function getNodeColor(type: string): string {
 export function RadialWebGraph({
   nodes,
   edges,
-  rootId,
+  initialRootId,
   selected,
   onSelect,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
-  rootId?: string | null;
+  initialRootId?: string | null;
   selected: string | null;
   onSelect: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [viewBox, setViewBox] = useState({ x: -450, y: -360, w: 900, h: 720 });
-  const [camera, setCamera] = useState({ x: 0, y: 0, k: 1 });
+  const [dimensions, setDimensions] = useState({ w: 1000, h: 700 });
+  const [camera, setCamera] = useState({ x: -280, y: 0, k: 1 });
   const isPanning = useRef<{ startX: number; startY: number; camX: number; camY: number } | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => {
+      setDimensions({ w: el.clientWidth || 1000, h: el.clientHeight || 700 });
+    };
+    update();
+    const obs = new ResizeObserver(update);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   // 1. Build Adjacency Map once
   const nodeMap = useMemo(() => {
@@ -90,24 +101,29 @@ export function RadialWebGraph({
       adj.get(u)!.add(v);
       adj.get(v)!.add(u);
 
-      const key1 = `${u}|${v}`;
-      const key2 = `${v}|${u}`;
-      emap.set(key1, edge);
-      emap.set(key2, edge);
+      emap.set(`${u}|${v}`, edge);
+      emap.set(`${v}|${u}`, edge);
     }
     return { adjacency: adj, edgeMap: emap };
   }, [edges]);
 
-  // Determine Effective Root
-  const effectiveRootId = useMemo(() => {
-    if (rootId && nodeMap.has(rootId)) return rootId;
-    if (selected && nodeMap.has(selected)) return selected;
-    // Find decision or highest degree node
+  // Stable Root ID (Root never changes automatically when user selects a child!)
+  const [rootId, setRootId] = useState<string>("");
+
+  useEffect(() => {
+    if (initialRootId && nodeMap.has(initialRootId)) {
+      setRootId(initialRootId);
+      return;
+    }
+    if (rootId && nodeMap.has(rootId)) return;
+
+    // Pick decision or most connected hub as root
     let best = nodes[0]?.id || "";
     let bestDeg = -1;
     for (const n of nodes) {
       if (n.type === "DECISION" || n.label.startsWith("JE") || n.id.includes("cell:D3")) {
-        return n.id;
+        setRootId(n.id);
+        return;
       }
       const deg = adjacency.get(n.id)?.size || 0;
       if (deg > bestDeg) {
@@ -115,10 +131,10 @@ export function RadialWebGraph({
         best = n.id;
       }
     }
-    return best;
-  }, [rootId, selected, nodes, nodeMap, adjacency]);
+    if (best) setRootId(best);
+  }, [initialRootId, nodes, nodeMap, adjacency, rootId]);
 
-  // State: Radial Tree Structure
+  // Tree State
   const [treeParents, setTreeParents] = useState<Map<string, string>>(new Map());
   const [treeChildren, setTreeChildren] = useState<Map<string, string[]>>(new Map());
   const [openSet, setOpenSet] = useState<Set<string>>(new Set());
@@ -130,14 +146,12 @@ export function RadialWebGraph({
   // Undo History Stack (Max 40)
   const historyStack = useRef<HistorySnapshot[]>([]);
 
-  // Gliding Animation Coordinates
+  // Positions for smooth Emil Kowalski transitions
   const [animPositions, setAnimPositions] = useState<Map<string, Point>>(new Map());
   const prevPositions = useRef<Map<string, Point>>(new Map());
-
-  // Hover state
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // Helper to push history
+  // Push history snapshot
   const pushHistory = useCallback(() => {
     const snap: HistorySnapshot = {
       visibleIds: Array.from(visibleIds),
@@ -165,20 +179,18 @@ export function RadialWebGraph({
     if (prev.selectedId) onSelect(prev.selectedId);
   }, [onSelect]);
 
-  // Initialize Radial Tree (Root + Immediate Neighbors)
-  useEffect(() => {
-    if (!effectiveRootId) return;
+  // Reset to initial root view
+  const handleResetToRoot = useCallback(() => {
+    if (!rootId) return;
+    pushHistory();
+    const neighbors = Array.from(adjacency.get(rootId) || []);
 
-    const root = effectiveRootId;
-    const neighbors = Array.from(adjacency.get(root) || []);
-
-    const newVisible = new Set<string>([root]);
+    const newVisible = new Set<string>([rootId]);
     const newParents = new Map<string, string>();
     const newChildren = new Map<string, string[]>();
     const newGroups = new Map<string, any>();
-    const newOpen = new Set<string>([root]);
+    const newOpen = new Set<string>([rootId]);
 
-    // Group neighbors by type if > 3
     const byType = new Map<string, GraphNode[]>();
     for (const nid of neighbors) {
       const node = nodeMap.get(nid);
@@ -192,30 +204,83 @@ export function RadialWebGraph({
     const rootKids: string[] = [];
     byType.forEach((items, type) => {
       if (items.length > 3) {
-        // Create Group Node
-        const gid = `group:${root}:${type}:0`;
+        const gid = `group:${rootId}:${type}:0`;
         newGroups.set(gid, {
           id: gid,
           type,
           label: `${items.length} ${pluralize(type)}`,
           count: items.length,
           members: items,
-          parentId: root,
+          parentId: rootId,
         });
         newVisible.add(gid);
-        newParents.set(gid, root);
+        newParents.set(gid, rootId);
         rootKids.push(gid);
       } else {
         for (const item of items) {
           newVisible.add(item.id);
-          newParents.set(item.id, root);
+          newParents.set(item.id, rootId);
           rootKids.push(item.id);
         }
       }
     });
 
-    newChildren.set(root, rootKids);
+    newChildren.set(rootId, rootKids);
+    setVisibleIds(newVisible);
+    setTreeParents(newParents);
+    setTreeChildren(newChildren);
+    setGroupNodes(newGroups);
+    setOpenSet(newOpen);
+    setCrossLinks([]);
+    onSelect(rootId);
+  }, [rootId, adjacency, nodeMap, onSelect, pushHistory]);
 
+  // Initial Population when rootId is set
+  useEffect(() => {
+    if (!rootId) return;
+
+    const neighbors = Array.from(adjacency.get(rootId) || []);
+    const newVisible = new Set<string>([rootId]);
+    const newParents = new Map<string, string>();
+    const newChildren = new Map<string, string[]>();
+    const newGroups = new Map<string, any>();
+    const newOpen = new Set<string>([rootId]);
+
+    const byType = new Map<string, GraphNode[]>();
+    for (const nid of neighbors) {
+      const node = nodeMap.get(nid);
+      if (!node) continue;
+      const t = node.type || "OTHER";
+      const list = byType.get(t) || [];
+      list.push(node);
+      byType.set(t, list);
+    }
+
+    const rootKids: string[] = [];
+    byType.forEach((items, type) => {
+      if (items.length > 3) {
+        const gid = `group:${rootId}:${type}:0`;
+        newGroups.set(gid, {
+          id: gid,
+          type,
+          label: `${items.length} ${pluralize(type)}`,
+          count: items.length,
+          members: items,
+          parentId: rootId,
+        });
+        newVisible.add(gid);
+        newParents.set(gid, rootId);
+        rootKids.push(gid);
+      } else {
+        for (const item of items) {
+          newVisible.add(item.id);
+          newParents.set(item.id, rootId);
+          rootKids.push(item.id);
+        }
+      }
+    });
+
+    newChildren.set(rootId, rootKids);
     setVisibleIds(newVisible);
     setTreeParents(newParents);
     setTreeChildren(newChildren);
@@ -223,51 +288,59 @@ export function RadialWebGraph({
     setOpenSet(newOpen);
     setCrossLinks([]);
     historyStack.current = [];
-  }, [effectiveRootId, adjacency, nodeMap]);
+  }, [rootId, adjacency, nodeMap]);
 
-  // Compute Tree Angles & Radii
+  // Tidy Horizontal Tree Layout (Constant Flow Left-to-Right)
   const treeNodes = useMemo(() => {
-    if (!effectiveRootId || visibleIds.size === 0) return [];
+    if (!rootId || visibleIds.size === 0) return [];
 
-    // 1. Calculate subtree leaf weight for each node
-    const weights = new Map<string, number>();
-    function calcWeight(id: string): number {
+    const COLUMN_GAP = 230;
+    const ROW_GAP = 50;
+
+    // 1. Assign depths
+    const depths = new Map<string, number>();
+    depths.set(rootId, 0);
+
+    function calcDepths(id: string, d: number) {
+      depths.set(id, d);
+      const kids = (treeChildren.get(id) || []).filter((k) => visibleIds.has(k));
+      for (const k of kids) calcDepths(k, d + 1);
+    }
+    calcDepths(rootId, 0);
+
+    // 2. Tidy Vertical Layout: compute leaf slots in post-order
+    let currentY = 0;
+    const yMap = new Map<string, number>();
+
+    function assignY(id: string) {
       const kids = (treeChildren.get(id) || []).filter((k) => visibleIds.has(k));
       if (kids.length === 0) {
-        weights.set(id, 1);
-        return 1;
+        yMap.set(id, currentY);
+        currentY += ROW_GAP;
+        return;
       }
-      let sum = 0;
-      for (const k of kids) sum += calcWeight(k);
-      weights.set(id, sum);
-      return sum;
+      for (const k of kids) assignY(k);
+      // Parent Y is vertically centered between first and last child
+      const firstY = yMap.get(kids[0])!;
+      const lastY = yMap.get(kids[kids.length - 1])!;
+      yMap.set(id, (firstY + lastY) / 2);
     }
-    calcWeight(effectiveRootId);
 
-    // 2. Find Max Depth
-    let maxD = 1;
-    function findMaxDepth(id: string, depth: number) {
-      if (depth > maxD) maxD = depth;
-      const kids = (treeChildren.get(id) || []).filter((k) => visibleIds.has(k));
-      for (const k of kids) findMaxDepth(k, depth + 1);
-    }
-    findMaxDepth(effectiveRootId, 0);
+    assignY(rootId);
 
-    const radiusPerDepth = Math.min(160, 345 / Math.max(1, maxD));
+    // 3. Center whole tree vertically
+    const rootY = yMap.get(rootId) || 0;
 
-    // 3. Radial positioning
-    const result: RadialNode[] = [];
+    const result: WebNode[] = [];
+    for (const id of Array.from(visibleIds)) {
+      const isRoot = id === rootId;
+      const depth = depths.get(id) ?? 0;
+      const x = depth * COLUMN_GAP;
+      const y = (yMap.get(id) ?? 0) - rootY;
 
-    function layoutSubtree(id: string, depth: number, startTheta: number, endTheta: number) {
-      const isRoot = id === effectiveRootId;
-      const theta = isRoot ? 0 : (startTheta + endTheta) / 2;
-      const R = isRoot ? 0 : depth * radiusPerDepth;
-      const x = R * Math.cos(theta);
-      const y = R * Math.sin(theta) * 0.92; // Squash y by 0.92 per spec
-
-      let nodeData = nodeMap.get(id);
       const isGroup = id.startsWith("group:");
       const groupData = groupNodes.get(id);
+      const nodeData = nodeMap.get(id);
 
       result.push({
         id,
@@ -276,7 +349,6 @@ export function RadialWebGraph({
         amount: isGroup ? null : nodeData?.amount || null,
         title: isGroup ? `Group of ${groupData?.count} ${groupData?.type}` : nodeData?.title || nodeData?.label,
         depth,
-        theta,
         x,
         y,
         parentId: treeParents.get(id) || null,
@@ -287,38 +359,12 @@ export function RadialWebGraph({
         groupType: groupData?.type,
         groupMembers: groupData?.members,
       });
-
-      const kids = (treeChildren.get(id) || []).filter((k) => visibleIds.has(k));
-      if (kids.length === 0) return;
-
-      const totalW = weights.get(id) || 1;
-      const totalSpan = endTheta - startTheta;
-
-      let currentTheta = startTheta;
-      for (const k of kids) {
-        const kw = weights.get(k) || 1;
-        const kidSpan = (kw / totalW) * totalSpan;
-        layoutSubtree(k, depth + 1, currentTheta, currentTheta + kidSpan);
-        currentTheta += kidSpan;
-      }
     }
 
-    layoutSubtree(effectiveRootId, 0, -Math.PI, Math.PI);
     return result;
-  }, [effectiveRootId, visibleIds, treeChildren, treeParents, openSet, nodeMap, groupNodes]);
+  }, [rootId, visibleIds, treeChildren, treeParents, openSet, nodeMap, groupNodes]);
 
-  // Max depth for concentric rings
-  const maxDepth = useMemo(() => {
-    let m = 1;
-    for (const n of treeNodes) {
-      if (n.depth > m) m = n.depth;
-    }
-    return m;
-  }, [treeNodes]);
-
-  const radiusPerDepth = Math.min(160, 345 / Math.max(1, maxDepth));
-
-  // Gliding Animation: Glide from parent on next frame
+  // Emil Kowalski Animation Sequence: Start from parent's position and glide outward
   useEffect(() => {
     const nextMap = new Map<string, Point>();
     const pMap = prevPositions.current;
@@ -327,7 +373,7 @@ export function RadialWebGraph({
       nextMap.set(node.id, { x: node.x, y: node.y });
     }
 
-    // New nodes start at their parent's coordinate
+    // New entering nodes start at their parent's coordinate
     const animMap = new Map<string, Point>();
     for (const node of treeNodes) {
       if (!pMap.has(node.id) && node.parentId && pMap.has(node.parentId)) {
@@ -341,8 +387,8 @@ export function RadialWebGraph({
     setAnimPositions(animMap);
 
     // Double requestAnimationFrame to trigger CSS transition outward
-    let f1 = requestAnimationFrame(() => {
-      let f2 = requestAnimationFrame(() => {
+    const f1 = requestAnimationFrame(() => {
+      const f2 = requestAnimationFrame(() => {
         setAnimPositions(nextMap);
         prevPositions.current = nextMap;
       });
@@ -354,13 +400,14 @@ export function RadialWebGraph({
 
   // Click Handler (Expand, Collapse, Group, Cross-Links)
   const handleNodeClick = useCallback(
-    (node: RadialNode) => {
+    (node: WebNode) => {
+      // 1. Always select the node for the inspector
       onSelect(node.id);
 
-      // 1. Group Node Click: Expand up to 8 members
+      // 2. Group Node Click: Expand up to 8 members
       if (node.isGroup && node.groupMembers) {
         pushHistory();
-        const pId = node.parentId || effectiveRootId;
+        const pId = node.parentId || rootId;
         const allMembers = node.groupMembers;
         const reveal = allMembers.slice(0, 8);
         const remainder = allMembers.slice(8);
@@ -407,7 +454,7 @@ export function RadialWebGraph({
         return;
       }
 
-      // 2. Already Open Node: Collapse descendants
+      // 3. Already Open Node: Collapse descendants (root stays open)
       if (openSet.has(node.id) && !node.isRoot) {
         pushHistory();
         const toRemove = new Set<string>();
@@ -423,7 +470,7 @@ export function RadialWebGraph({
         const newVis = new Set(visibleIds);
         const newOpen = new Set(openSet);
         newOpen.delete(node.id);
-        for (const id of toRemove) {
+        for (const id of Array.from(toRemove)) {
           newVis.delete(id);
           newOpen.delete(id);
         }
@@ -438,24 +485,24 @@ export function RadialWebGraph({
         return;
       }
 
-      // 3. Unopened Node: Check neighbors
+      // 4. Unopened Node: Check neighbors
       const allNeighbors = Array.from(adjacency.get(node.id) || []);
       const newNeighbors = allNeighbors.filter((nid) => !visibleIds.has(nid));
 
-      // 4. If all neighbors already on screen: draw cross-links and show toast
+      // 5. If all neighbors already on screen: draw cross-links and show toast
       if (newNeighbors.length === 0) {
         if (allNeighbors.length > 0) {
           setCrossLinks(allNeighbors.map((target) => ({ from: node.id, to: target })));
           setToast(`Everything linked to ${node.label} is already on screen.`);
-          setTimeout(() => setToast(null), 3000);
+          setTimeout(() => setToast(null), 2800);
         } else {
           setToast(`No linked documents for ${node.label}.`);
-          setTimeout(() => setToast(null), 2500);
+          setTimeout(() => setToast(null), 2400);
         }
         return;
       }
 
-      // 5. Expand New Neighbors
+      // 6. Expand New Neighbors (Flow to the Right)
       pushHistory();
       const byType = new Map<string, GraphNode[]>();
       for (const nid of newNeighbors) {
@@ -516,25 +563,10 @@ export function RadialWebGraph({
       groupNodes,
       adjacency,
       nodeMap,
-      effectiveRootId,
+      rootId,
       pushHistory,
     ]
   );
-
-  // Resize Observer
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const updateSize = () => {
-      const w = el.clientWidth || 900;
-      const h = el.clientHeight || 720;
-      setViewBox({ x: -w / 2, y: -h / 2, w, h });
-    };
-    updateSize();
-    const obs = new ResizeObserver(updateSize);
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
 
   // Trackpad Pinch-to-Zoom
   useEffect(() => {
@@ -560,6 +592,14 @@ export function RadialWebGraph({
     }
     return map;
   }, [treeNodes, animPositions]);
+
+  const maxDepth = useMemo(() => {
+    let m = 0;
+    for (const n of treeNodes) {
+      if (n.depth > m) m = n.depth;
+    }
+    return m;
+  }, [treeNodes]);
 
   return (
     <div
@@ -597,8 +637,15 @@ export function RadialWebGraph({
         >
           ↶ Back
         </button>
+        <button
+          className="web-btn"
+          onClick={handleResetToRoot}
+          title="Reset flow to root record"
+        >
+          Root: {nodeMap.get(rootId)?.label || "Start"}
+        </button>
         <span className="web-pill">
-          Depth {maxDepth} · {visibleIds.size} visible
+          Flow: {maxDepth + 1} Tiers · {visibleIds.size} visible
         </span>
       </div>
 
@@ -610,32 +657,26 @@ export function RadialWebGraph({
       )}
 
       {/* SVG Canvas */}
-      <svg
-        className="radial-svg"
-        viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
-      >
-        <g transform={`translate(${camera.x}, ${camera.y}) scale(${camera.k})`}>
-          {/* 1. Faint Concentric Guide Rings */}
-          {Array.from({ length: maxDepth }).map((_, idx) => {
-            const d = idx + 1;
-            const rx = d * radiusPerDepth;
-            const ry = rx * 0.92;
+      <svg className="radial-svg">
+        <g transform={`translate(${dimensions.w / 2 + camera.x}, ${dimensions.h / 2 + camera.y}) scale(${camera.k})`}>
+          {/* 1. Subtle Column Tier Dividers */}
+          {Array.from({ length: maxDepth + 1 }).map((_, idx) => {
+            const x = idx * 230;
             return (
-              <ellipse
-                key={`ring-${d}`}
-                cx={0}
-                cy={0}
-                rx={rx}
-                ry={ry}
-                fill="none"
-                stroke="rgba(13, 13, 12, 0.06)"
+              <line
+                key={`tier-${idx}`}
+                x1={x}
+                y1={-600}
+                x2={x}
+                y2={600}
+                stroke="rgba(13, 13, 12, 0.03)"
                 strokeWidth={1}
-                strokeDasharray="3 3"
+                strokeDasharray="4 4"
               />
             );
           })}
 
-          {/* 2. Radial Tree Edges */}
+          {/* 2. Horizontal Bezier Connectors (Constant Flow Left-to-Right) */}
           {treeNodes
             .filter((n) => !n.isRoot && n.parentId)
             .map((n) => {
@@ -656,22 +697,26 @@ export function RadialWebGraph({
                 ? "#10B981"
                 : isSelected
                 ? "rgba(13, 13, 12, 0.65)"
-                : "rgba(13, 13, 12, 0.18)";
+                : "rgba(13, 13, 12, 0.16)";
 
               const strokeW = isSelected ? 1.8 : 1.1;
 
+              // Smooth horizontal cubic bezier curve
+              const dx = c.x - p.x;
+              const cpx1 = p.x + dx * 0.45;
+              const cpx2 = c.x - dx * 0.45;
+              const pathD = `M ${p.x} ${p.y} C ${cpx1} ${p.y}, ${cpx2} ${c.y}, ${c.x} ${c.y}`;
+
               return (
-                <line
+                <path
                   key={`edge-${n.parentId}-${n.id}`}
-                  x1={p.x}
-                  y1={p.y}
-                  x2={c.x}
-                  y2={c.y}
+                  d={pathD}
+                  fill="none"
                   stroke={strokeColor}
                   strokeWidth={strokeW}
                   strokeDasharray={isDashed ? "4 4" : "none"}
                   style={{
-                    transition: "x1 .6s cubic-bezier(.2,.8,.2,1), y1 .6s cubic-bezier(.2,.8,.2,1), x2 .6s cubic-bezier(.2,.8,.2,1), y2 .6s cubic-bezier(.2,.8,.2,1)",
+                    transition: "d 0.24s cubic-bezier(0.23, 1, 0.32, 1), stroke 0.15s ease",
                   }}
                 />
               );
@@ -683,15 +728,11 @@ export function RadialWebGraph({
             const p2 = posMap.get(cl.to);
             if (!p1 || !p2) return null;
 
-            // Curved quadratic bezier arc
             const midX = (p1.x + p2.x) / 2;
             const midY = (p1.y + p2.y) / 2;
-            const dx = p2.x - p1.x;
             const dy = p2.y - p1.y;
-            const normalX = -dy * 0.25;
-            const normalY = dx * 0.25;
-            const cpx = midX + normalX;
-            const cpy = midY + normalY;
+            const cpx = midX - Math.abs(dy) * 0.3 - 20;
+            const cpy = midY;
 
             return (
               <path
@@ -712,20 +753,18 @@ export function RadialWebGraph({
             const isSelected = selected === n.id;
             const isHovered = hoveredId === n.id;
             const color = getNodeColor(n.type);
-            const r = n.isRoot ? 12 : 7.5;
+            const r = n.isRoot ? 11 : 7.5;
 
-            // Fill & Stroke logic per spec:
+            // Fill & Stroke logic:
             // Fill = type color when root or opened; white with type-colored stroke otherwise.
             const isFilled = n.isRoot || n.isOpen;
             const fill = isFilled ? color : "#FFFFFF";
             const stroke = isSelected || isHovered ? "#0D0D0C" : color;
             const strokeWidth = isSelected ? 2.5 : isHovered ? 2.0 : isFilled ? 1.5 : 2.0;
 
-            // Label positioning facing away from center
-            const isRight = Math.cos(n.theta) >= 0;
-            const labelX = n.isRoot ? 0 : isRight ? r + 8 : -(r + 8);
-            const labelY = n.isRoot ? r + 15 : 3.5;
-            const anchor = n.isRoot ? "middle" : isRight ? "start" : "end";
+            // Label positioning strictly to the right of node
+            const labelX = r + 8;
+            const labelY = 3.5;
 
             return (
               <g
@@ -733,7 +772,7 @@ export function RadialWebGraph({
                 className="radial-node-group"
                 style={{
                   transform: `translate(${pos.x}px, ${pos.y}px)`,
-                  transition: "transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.4s ease",
+                  transition: "transform 0.24s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.2s cubic-bezier(0.23, 1, 0.32, 1)",
                   cursor: "pointer",
                 }}
                 onClick={(e) => {
@@ -746,11 +785,11 @@ export function RadialWebGraph({
                 {/* Selected Halo */}
                 {isSelected && (
                   <circle
-                    r={r + 5.5}
+                    r={r + 5}
                     fill="none"
                     stroke="#0D0D0C"
                     strokeWidth={1.5}
-                    opacity={0.3}
+                    opacity={0.25}
                   />
                 )}
 
@@ -776,11 +815,11 @@ export function RadialWebGraph({
                   <circle r={2.5} fill={color} />
                 )}
 
-                {/* Label (Always shown for root or selected; clean display for others) */}
+                {/* Label Placed to the Right */}
                 <text
                   x={labelX}
                   y={labelY}
-                  textAnchor={anchor}
+                  textAnchor="start"
                   className="radial-node-label"
                   fill={isSelected ? "#0D0D0C" : "rgba(13, 13, 12, 0.85)"}
                   fontWeight={isSelected ? 700 : n.isRoot ? 600 : 500}
