@@ -115,9 +115,7 @@ export function RadialWebGraph({
 
   // Root Candidate list for the root picker dropdown
   const rootCandidates = useMemo(() => {
-    const list = nodes.filter(
-      (n) => n.type === "DECISION" || n.label.startsWith("JE") || n.id.includes("cell:D3")
-    );
+    const list = nodes.filter((n) => n.type === "DECISION");
     if (list.length === 0) return nodes.slice(0, 8);
     return list;
   }, [nodes]);
@@ -131,10 +129,7 @@ export function RadialWebGraph({
     }
     if (rootId && nodeMap.has(rootId)) return;
 
-    // Pick first decision or journal entry node (e.g. JE-900, JE-911)
-    const decision = nodes.find(
-      (n) => n.type === "DECISION" || n.label.startsWith("JE") || n.id.includes("cell:D3") || n.label === "D3"
-    );
+    const decision = nodes.find((n) => n.type === "DECISION" || n.label.startsWith("JE"));
     if (decision) {
       setRootId(decision.id);
       return;

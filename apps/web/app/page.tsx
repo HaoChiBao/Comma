@@ -90,110 +90,8 @@ export default function HomePage() {
           `/api/v1/snapshots/${snapshot.id}/graph?view=${view}`
         );
 
-        if (focus === "CASE-011") {
-          const nodesCopy = [...snapGraph.nodes];
-          const edgesCopy = [...snapGraph.edges];
-
-          const target = nodesCopy.find((n) => n.label === "JE-911" || n.label === "D3");
-          if (target) {
-            target.label = "D3";
-            target.title = "Accruals!D3 · Cloud Services Inc.";
-          }
-
-          if (!nodesCopy.some((n) => n.id === "cell:B3")) {
-            nodesCopy.push({
-              id: "cell:B3",
-              type: "PRECEDENT",
-              label: "B3",
-              title: "PO line 1",
-              amount: "100.00",
-              origin: "formula",
-              version_id: "cell:B3",
-              available_from: "2025-09-12T16:00:00+00:00",
-              document_date: "2025-09-12T16:00:00+00:00",
-              redacted: false,
-              group: "CASE-011",
-              case_id: "CASE-011",
-            });
-            if (target) {
-              edgesCopy.push({
-                id: "edge-b3-d3",
-                source: "cell:B3",
-                target: target.id,
-                type: "DERIVED_FROM",
-                inferred: false,
-                explanation: "Cell B3 PO line 1 feeds into formula =B3+C3",
-                confidence: "high",
-              });
-            }
-          }
-
-          if (!nodesCopy.some((n) => n.id === "cell:C3")) {
-            nodesCopy.push({
-              id: "cell:C3",
-              type: "PRECEDENT",
-              label: "C3",
-              title: "PO line 2",
-              amount: "50.00",
-              origin: "formula",
-              version_id: "cell:C3",
-              available_from: "2025-09-12T16:00:00+00:00",
-              document_date: "2025-09-12T16:00:00+00:00",
-              redacted: false,
-              group: "CASE-011",
-              case_id: "CASE-011",
-            });
-            if (target) {
-              edgesCopy.push({
-                id: "edge-c3-d3",
-                source: "cell:C3",
-                target: target.id,
-                type: "DERIVED_FROM",
-                inferred: false,
-                explanation: "Cell C3 PO line 2 feeds into formula =B3+C3",
-                confidence: "high",
-              });
-            }
-          }
-
-          const hasInv = nodesCopy.some((n) => n.label.startsWith("INV"));
-          if (!hasInv && (currentActor?.role === "auditor" || asOf.includes("2025-12"))) {
-            nodesCopy.push({
-              id: "artifact:INV-104:v1",
-              type: "INVOICE",
-              label: "INV",
-              title: "Invoice INV-104",
-              amount: asOf.includes("2025-12") ? "158.00" : null,
-              origin: "vendor",
-              version_id: "INV-104:v1",
-              available_from: "2025-12-10T09:00:00+00:00",
-              document_date: "2025-09-28T00:00:00+00:00",
-              redacted: !asOf.includes("2025-12"),
-              group: "CASE-011",
-              case_id: "CASE-011",
-            });
-            if (target) {
-              edgesCopy.push({
-                id: "edge-inv-d3",
-                source: "artifact:INV-104:v1",
-                target: target.id,
-                type: asOf.includes("2025-12") ? "CONTRADICTS" : "POTENTIALLY_SUPPORTS",
-                inferred: true,
-                explanation: "Invoice withheld until Dec 10.",
-                confidence: "medium",
-              });
-            }
-          }
-
-          setCaseNodes(nodesCopy);
-          setCaseEdges(edgesCopy);
-
-          const emNode = nodesCopy.find((n) => n.label.includes("EM-208") || n.label === "EM");
-          if (emNode && !selected) setSelected(emNode.id);
-        } else {
-          setCaseNodes(snapGraph.nodes);
-          setCaseEdges(snapGraph.edges);
-        }
+        setCaseNodes(snapGraph.nodes);
+        setCaseEdges(snapGraph.edges);
       })
       .catch(() => {
         setCaseNodes([]);
@@ -218,6 +116,10 @@ export default function HomePage() {
 
   const currentNode = activeNodes.find((item) => item.id === selected) || null;
   const nodeSummary = useNodeSummary(currentNode?.id || null, actorId, asOf, mode, organizationId);
+  const focusedCase = (graph?.cases || []).find((item) => item.id === focus) || null;
+  const links = currentNode ? linkedRecords(currentNode, activeNodes, activeEdges) : [];
+  const gap = currentNode ? amountGap(currentNode.amount, links.filter((item) => item.edge.type === "CONTRADICTS").map((item) => item.node?.amount)) : null;
+  const timeline = currentNode ? datedRecords(currentNode, links.flatMap((item) => (item.node ? [item.node] : []))) : [];
 
   function handleSelectNode(nodeId: string) {
     if (!nodeId) {
@@ -281,16 +183,12 @@ export default function HomePage() {
                 setSelected(null);
               }}
             >
-              <option value="">All Cases (Atom Graph)</option>
-              <option value="CASE-011">CASE-011 · Cloud Services (Workbook)</option>
-              <option value="CASE-001">CASE-001 · Cloud Services Inc.</option>
-              {(graph?.cases || [])
-                .filter((c) => c.id !== "CASE-011" && c.id !== "CASE-001")
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.id} · {c.vendor}
-                  </option>
-                ))}
+              <option value="">All cases</option>
+              {(graph?.cases || []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.id} · {c.vendor}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -393,27 +291,32 @@ export default function HomePage() {
                 {currentNode.redacted ? (
                   <span className="status-badge" style={{ color: "#94A3B8" }}>
                     <span className="status-dot grey" />
-                    Withheld at Close
+                    Withheld
                   </span>
-                ) : activeEdges.some((e) => (e.source === currentNode.id || e.target === currentNode.id) && e.type === "CONTRADICTS") ? (
+                ) : gap ? (
                   <span className="status-badge needs-review">
                     <span className="status-dot orange" />
-                    Conflicts ($10 diff)
+                    Differs by ${gap}
                   </span>
-                ) : activeEdges.some((e) => (e.source === currentNode.id || e.target === currentNode.id) && e.type === "RECONCILES_WITH") ? (
+                ) : links.some((item) => item.edge.type === "CONTRADICTS") ? (
+                  <span className="status-badge needs-review">
+                    <span className="status-dot orange" />
+                    Amounts differ
+                  </span>
+                ) : links.some((item) => item.edge.type === "RECONCILES_WITH") ? (
                   <span className="status-badge verified">
                     <span className="status-dot green" />
-                    Verified Match
+                    Amounts match
                   </span>
                 ) : currentNode.type === "DECISION" ? (
                   <span className="status-badge">
                     <span className="status-dot black" />
-                    Recorded Accrual
+                    Recorded
                   </span>
                 ) : (
                   <span className="status-badge" style={{ color: "var(--muted)" }}>
                     <span className="status-dot green" />
-                    Available Evidence
+                    In snapshot
                   </span>
                 )}
               </div>
@@ -426,20 +329,17 @@ export default function HomePage() {
                 <NodeSummary
                   summary={nodeSummary.summary}
                   error={nodeSummary.error}
-                  nodes={graph?.nodes || []}
+                  nodes={activeNodes}
                   onOpen={openSummaryNode}
                 />
               </div>
 
-              {/* Formula Callout Box: ONLY shown if inspecting an Excel formula cell / accrual decision */}
-              {(currentNode.id.includes("cell:") ||
-                (focus === "CASE-011" && (currentNode.label === "D3" || currentNode.label.startsWith("JE")))) && (
+              {currentNode.formula ? (
                 <div className="formula-box">
                   <span className="label">Formula</span>
-                  <span className="code">=B3+C3</span>
-                  <span className="calc">$100.00 + $50.00 = $150.00</span>
+                  <span className="code">{currentNode.formula}</span>
                 </div>
-              )}
+              ) : null}
 
               <button
                 className="set-root-action-btn"
@@ -465,46 +365,15 @@ export default function HomePage() {
                   </tr>
                   <tr>
                     <td className="key">Knowable</td>
-                    <td className="val">
-                      {currentNode.available_from ? (
-                        <>
-                          <strong>{currentNode.available_from.slice(0, 10)}</strong>{" "}
-                          <span className="muted" style={{ fontSize: "0.72rem" }}>
-                            {currentNode.available_from > asOf
-                              ? "(Withheld: Future document)"
-                              : "(Available before close)"}
-                          </span>
-                        </>
-                      ) : (
-                        "Baseline record"
-                      )}
-                    </td>
+                    <td className="val">{currentNode.available_from ? currentNode.available_from.slice(0, 10) : "—"}</td>
+                  </tr>
+                  <tr>
+                    <td className="key">Document date</td>
+                    <td className="val">{currentNode.document_date ? currentNode.document_date.slice(0, 10) : "—"}</td>
                   </tr>
                   <tr>
                     <td className="key">Origin</td>
-                    <td className="val">
-                      {currentNode.origin === "vendor"
-                        ? "Vendor correspondence"
-                        : currentNode.origin === "formula"
-                        ? "Workbook cell formula"
-                        : currentNode.type === "EMAIL"
-                        ? "Inbound AP mailbox"
-                        : currentNode.type === "PURCHASE_ORDER"
-                        ? "ERP purchase order system"
-                        : "Company general ledger"}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="key">Audit Role</td>
-                    <td className="val">
-                      {currentNode.redacted
-                        ? "Withheld from accountant during close to prevent future leakage."
-                        : activeEdges.some((e) => (e.source === currentNode.id || e.target === currentNode.id) && e.type === "CONTRADICTS")
-                        ? "Flags discrepancy: Amount differs from related records naming the same transaction."
-                        : activeEdges.some((e) => (e.source === currentNode.id || e.target === currentNode.id) && e.type === "RECONCILES_WITH")
-                        ? "Reconciles and supports the recorded accrual entry."
-                        : "Ingested evidence record. Available to preparer prior to close."}
-                    </td>
+                    <td className="val">{currentNode.origin || "—"}</td>
                   </tr>
                 </tbody>
               </table>
@@ -517,44 +386,34 @@ export default function HomePage() {
 
             {/* Upstream / Downstream Graph Relationships */}
             <div>
-              <div className="trace-title">
-                Connected Evidence ({activeEdges.filter((e) => e.source === currentNode.id || e.target === currentNode.id).length})
-              </div>
+              <div className="trace-title">Connected ({links.length})</div>
               <div className="link-list">
-                {activeEdges.filter((e) => e.source === currentNode.id || e.target === currentNode.id).length === 0 ? (
+                {links.length === 0 ? (
                   <div className="empty-rel-box">
-                    <strong style={{ display: "block", marginBottom: "0.2rem" }}>Standalone Evidence</strong>
-                    <span className="muted">
-                      Ingested into the company knowledge base. Not directly cited or linked to a specific accrual journal entry.
-                    </span>
+                    <span className="muted">No other record in this snapshot links here.</span>
                   </div>
                 ) : (
-                  activeEdges
-                    .filter((e) => e.source === currentNode.id || e.target === currentNode.id)
-                    .map((edge) => {
-                      const otherId = edge.source === currentNode.id ? edge.target : edge.source;
-                      const otherNode = activeNodes.find((n) => n.id === otherId);
-                      const otherLabel = otherNode?.label || otherId.replace(/^artifact:/, "").replace(/:v\d+$/, "");
-                      return (
-                        <button
-                          key={edge.id}
-                          className="rel-card-btn"
-                          onClick={() => handleSelectNode(otherId)}
-                          title={`Inspect ${otherLabel}`}
-                        >
-                          <div className="rel-card-header">
-                            <span className={`rel-badge ${edge.type.toLowerCase()}`}>
-                              {edge.type.replace(/_/g, " ")}
-                            </span>
-                            <span className="rel-other-label">{otherLabel}</span>
-                            {otherNode?.amount && <span className="rel-amt">${otherNode.amount}</span>}
-                          </div>
-                          {edge.explanation && (
-                            <div className="rel-expl">{edge.explanation}</div>
-                          )}
-                        </button>
-                      );
-                    })
+                  links.map(({ edge, node: otherNode }) => {
+                    const otherId = edge.source === currentNode.id ? edge.target : edge.source;
+                    const otherLabel = otherNode?.label || otherId;
+                    return (
+                      <button
+                        key={edge.id}
+                        className="rel-card-btn"
+                        onClick={() => handleSelectNode(otherId)}
+                        title={`Inspect ${otherLabel}`}
+                      >
+                        <div className="rel-card-header">
+                          <span className={`rel-badge ${edge.type.toLowerCase()}`}>
+                            {edge.type.replace(/_/g, " ")}
+                          </span>
+                          <span className="rel-other-label">{otherLabel}</span>
+                          {otherNode?.amount && !otherNode.redacted ? <span className="rel-amt">${otherNode.amount}</span> : null}
+                        </div>
+                        {edge.explanation ? <div className="rel-expl">{edge.explanation}</div> : null}
+                      </button>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -563,64 +422,22 @@ export default function HomePage() {
             <div className="trace-section">
               <div className="trace-title">Timeline Context</div>
               <div className="trace-list">
-                {currentNode.case_id === "CASE-011" || focus === "CASE-011" ? (
-                  <>
-                    <div className="trace-item">
-                      <span className="trace-date">Sep 12</span>
-                      <span className="trace-marker"><span className="trace-dot green" /></span>
-                      <span className="trace-desc">PO-104 received</span>
-                      <span className="trace-amt">$150.00</span>
-                    </div>
-                    <div className="trace-item">
-                      <span className="trace-date">Sep 26</span>
-                      <span className="trace-marker"><span className="trace-dot orange" /></span>
-                      <span className="trace-desc">EM-208 received</span>
-                      <span className="trace-amt">$160.00</span>
-                    </div>
-                    <div className="trace-item">
-                      <span className="trace-date">Sep 30</span>
-                      <span className="trace-marker"><span className="trace-dot black" /></span>
-                      <span className="trace-desc">Books closed, accrual posted</span>
-                      <span className="trace-amt">$150.00</span>
-                    </div>
-                    {(asOf.includes("2025-12") || currentActor?.role === "auditor") && (
-                      <div className="trace-item">
-                        <span className="trace-date">Dec 10</span>
-                        <span className="trace-marker"><span className="trace-dot grey" /></span>
-                        <span className="trace-desc">
-                          {asOf.includes("2025-12") ? "INV-104 received" : "INV-104 (withheld)"}
-                        </span>
-                        <span className="trace-amt">
-                          {asOf.includes("2025-12") ? "$158.00" : "—"}
-                        </span>
-                      </div>
-                    )}
-                  </>
-                ) : currentNode.available_from ? (
-                  <>
-                    <div className="trace-item">
-                      <span className="trace-date">{currentNode.available_from.slice(5, 10).replace("-", " ")}</span>
-                      <span className="trace-marker"><span className="trace-dot green" /></span>
-                      <span className="trace-desc">Document knowable</span>
-                      <span className="trace-amt">{currentNode.amount ? `$${currentNode.amount}` : "—"}</span>
-                    </div>
-                    <div className="trace-item">
-                      <span className="trace-date">Sep 30</span>
-                      <span className="trace-marker"><span className="trace-dot black" /></span>
-                      <span className="trace-desc">Books close cutoff</span>
-                      <span className="trace-amt">{currentNode.available_from <= asOf ? "Visible" : "Withheld"}</span>
-                    </div>
-                    <div className="trace-item">
-                      <span className="trace-date">Dec 15</span>
-                      <span className="trace-marker"><span className="trace-dot grey" /></span>
-                      <span className="trace-desc">Post-close audit review</span>
-                      <span className="trace-amt">Verified</span>
-                    </div>
-                  </>
-                ) : (
+                {timeline.length === 0 ? (
                   <div className="empty-rel-box">
-                    <span className="muted">Permanent baseline record in general ledger.</span>
+                    <span className="muted">No date is stored on this record.</span>
                   </div>
+                ) : (
+                  timeline.map((item) => {
+                    const when = item.available_from || item.document_date || "";
+                    return (
+                      <div className="trace-item" key={item.id}>
+                        <span className="trace-date">{shortDate(when)}</span>
+                        <span className="trace-marker"><span className={`trace-dot ${item.redacted ? "grey" : item.id === currentNode.id ? "black" : "green"}`} /></span>
+                        <span className="trace-desc">{item.label}</span>
+                        <span className="trace-amt">{item.redacted ? "—" : item.amount ? `$${item.amount}` : "—"}</span>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -631,7 +448,7 @@ export default function HomePage() {
             <div className="sidebar-header">
               <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div className="cell-eyebrow">
-                  {focus ? `${focus} · Overview` : "Company Knowledge Graph"}
+                  {focusedCase ? `${focusedCase.id} · ${focusedCase.vendor}` : "All cases"}
                 </div>
                 <button
                   className="inspector-close-btn"
@@ -643,17 +460,15 @@ export default function HomePage() {
               </div>
 
               <div className="header-amount-row">
-                <span className="amount">{activeNodes.length} Nodes</span>
+                <span className="amount">{graph?.corpus ? `${graph.corpus.visible} documents` : "—"}</span>
                 <span className="status-badge verified">
                   <span className="status-dot green" />
-                  Active Corpus
+                  {graph?.corpus ? `${graph.corpus.visible} visible` : "In snapshot"}
                 </span>
               </div>
 
               <p className="header-summary">
-                {focus
-                  ? graph?.cases.find((c) => c.id === focus)?.finding || "Select any node in the graph to inspect evidence and relationships."
-                  : "Click any node in the 3D atom graph to inspect its evidence record, knowable timeline, and audit connections."}
+                {focusedCase?.finding || `${graph?.cases.length || 0} cases in this snapshot.`}
               </p>
             </div>
           </div>
@@ -735,4 +550,39 @@ function filteredDocuments(graph: CompanyGraph | null, query: string) {
           .includes(needle)
     )
     .slice(0, 15);
+}
+
+function linkedRecords(node: GraphNode, nodes: GraphNode[], edges: GraphEdge[]) {
+  return edges
+    .filter((edge) => edge.source === node.id || edge.target === node.id)
+    .map((edge) => {
+      const otherId = edge.source === node.id ? edge.target : edge.source;
+      return { edge, node: nodes.find((item) => item.id === otherId) || null };
+    });
+}
+
+function amountGap(amount: string | null, others: (string | null | undefined)[]) {
+  const left = Number(amount);
+  const values = others.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item !== left);
+  if (!Number.isFinite(left) || values.length === 0) return null;
+  return Math.abs(left - values[0]).toFixed(2);
+}
+
+function datedRecords(node: GraphNode, neighbors: GraphNode[]) {
+  const seen = new Set<string>();
+  return [node, ...neighbors]
+    .filter((item) => {
+      if (seen.has(item.id) || !(item.available_from || item.document_date)) return false;
+      seen.add(item.id);
+      return true;
+    })
+    .sort((a, b) => (a.available_from || a.document_date || "").localeCompare(b.available_from || b.document_date || ""));
+}
+
+function shortDate(iso: string) {
+  const month = Number(iso.slice(5, 7));
+  const day = Number(iso.slice(8, 10));
+  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  if (!day || month < 1 || month > 12) return iso.slice(0, 10);
+  return `${names[month - 1]} ${day}`;
 }

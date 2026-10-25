@@ -50,6 +50,7 @@ export type GraphNode = {
   title: string;
   amount: string | null;
   origin: string;
+  formula?: string;
   version_id: string;
   available_from: string | null;
   document_date: string | null;

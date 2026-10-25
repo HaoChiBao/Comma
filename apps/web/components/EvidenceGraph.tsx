@@ -205,18 +205,16 @@ function CardGraph({
 }
 
 function getNodeBadge(node: GraphNode): string {
-  if (node.redacted) return "INV";
-  const label = node.label.toUpperCase();
-  if (label.includes("D3") || label === "JE-911" || label.startsWith("ACR")) return "D3";
-  if (label.includes("B3")) return "B3";
-  if (label.includes("C3")) return "C3";
-  if (node.type === "PURCHASE_ORDER" || label.startsWith("PO")) return "PO";
-  if (node.type === "EMAIL" || label.startsWith("EM") || label.startsWith("MSG")) return "EM";
-  if (node.type === "INVOICE" || label.startsWith("INV")) return "INV";
-  if (node.type === "CONTRACT" || label.startsWith("CTR")) return "CTR";
-  if (node.type === "DECISION" || label.startsWith("JE")) return "JE";
-  if (node.type === "POLICY" || label.startsWith("POL")) return "POL";
-  return label.slice(0, 3);
+  if (node.redacted) return "—";
+  if (node.type === "PURCHASE_ORDER") return "PO";
+  if (node.type === "EMAIL") return "EM";
+  if (node.type === "INVOICE") return "INV";
+  if (node.type === "CONTRACT") return "CTR";
+  if (node.type === "DECISION") return "JE";
+  if (node.type === "POLICY" || node.type === "POLICY_VERSION") return "POL";
+  if (node.type === "VENDOR") return "VEN";
+  if (node.type === "TRANSACTION") return "TXN";
+  return node.label.slice(0, 3);
 }
 
 function getNodeTypeClass(node: GraphNode): string {

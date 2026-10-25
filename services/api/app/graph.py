@@ -39,9 +39,8 @@ def project_graph(db: Session, snapshot_id: str, view: str) -> dict:
             continue
         visible_versions.append(version)
         amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
-        origin = "unexplained" if version.artifact.kind == "journal" else "sourced"
-        if (version.metadata_json or {}).get("formula"):
-            origin = "calculated"
+        formula = (version.metadata_json or {}).get("formula") or ""
+        origin = "calculated" if formula else "unexplained" if version.artifact.kind == "journal" else "sourced"
         nodes.append(
             {
                 "id": f"artifact:{version.id}",
@@ -50,6 +49,7 @@ def project_graph(db: Session, snapshot_id: str, view: str) -> dict:
                 "title": version.artifact.title,
                 "amount": money(amount),
                 "origin": origin,
+                "formula": formula,
                 "version_id": version.id,
                 "available_from": version.available_from.isoformat() if version.available_from else None,
                 "document_date": version.document_date.isoformat(),

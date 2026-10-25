@@ -199,7 +199,8 @@ def _node(version: ArtifactVersion, case_ids: list[str], *, redacted: bool) -> d
         "amount": None if redacted else money(amount),
         "group": group,
         "case_id": case_ids[0] if case_ids else "",
-        "origin": "unexplained" if kind == "journal" else "sourced",
+        "origin": "calculated" if (version.metadata_json or {}).get("formula") else "unexplained" if kind == "journal" else "sourced",
+        "formula": (version.metadata_json or {}).get("formula") or "",
         "version_id": version.id,
         "available_from": version.available_from.isoformat() if version.available_from else None,
         "document_date": None if redacted else version.document_date.isoformat(),
@@ -220,15 +221,16 @@ def _finding(case_id: str, nodes: list[dict], view: str) -> str:
         parts.append("The recorded decision is outside this snapshot.")
     else:
         parts.append("No recorded decision is inside this snapshot.")
-    if rest:
-        parts.append("Visible evidence: " + ", ".join(f"{node['label']} ${node['amount']}" for node in rest) + ".")
-    if len({node["amount"] for node in rest}) > 1:
-        parts.append("Those amounts do not agree.")
     invoices = [node for node in rest if node["type"] == "INVOICE"]
     if journals and invoices:
         delta = Decimal(invoices[0]["amount"]) - Decimal(journals[0]["amount"])
-        direction = "higher" if delta > 0 else "lower"
-        parts.append(f"The invoice is ${abs(delta):.2f} {direction} than the accrual.")
+        if delta == 0:
+            parts.append(f"{invoices[0]['label']} matches at ${invoices[0]['amount']}.")
+        else:
+            direction = "higher" if delta > 0 else "lower"
+            parts.append(f"{invoices[0]['label']} is ${invoices[0]['amount']}, ${abs(delta):.2f} {direction}.")
+    elif len({node["amount"] for node in visible}) > 1:
+        parts.append("The amounts in this snapshot do not agree.")
     if view == "auditor" and any(node["redacted"] for node in mine):
         parts.append("Some related evidence is blocked at this time.")
     return " ".join(parts)
