@@ -294,3 +294,20 @@ def test_workbook_is_not_ready_before_company_ingest():
     response = api.post("/v1/traces/inspect", json={"workbook_id": WORKBOOK, "sheet_name": SHEET, "cell_address": "F2", "raw_value": 150, "as_of": SEPT})
     assert response.status_code == 503
     assert response.json()["code"] == "INDEX_NOT_READY"
+
+
+def test_startup_indexing_waits_for_the_company_ingest(api):
+    from app.db import session
+    from app.main import _wait_for_ingest
+    from app.models import IngestJob
+
+    assert _wait_for_ingest("org-decagon", timeout=1, interval=0.01) is True
+    with session() as db:
+        job = db.query(IngestJob).filter_by(organization_id="org-decagon").one()
+        job.status = "running"
+        db.commit()
+    assert _wait_for_ingest("org-decagon", timeout=0.05, interval=0.01) is False
+    with session() as db:
+        db.query(IngestJob).filter_by(organization_id="org-decagon").one().status = "failed"
+        db.commit()
+    assert _wait_for_ingest("org-decagon", timeout=1, interval=0.01) is False

@@ -33,14 +33,41 @@ def _load_company(db) -> None:
 
     def _index() -> None:
         from app.graphstore.store import ensure_company_index
-
+        from app.ingest.decagon import ORG
         from app.ingest.decagon_workbook import ensure_workbook
 
+        # The ingest runs in its own thread. Indexing before it finishes would find no documents
+        # (or only some) and never load the ledger rows, so wait for it.
+        if not _wait_for_ingest(ORG):
+            return
         with session() as database:
             ensure_company_index(database)
             ensure_workbook(database)
 
     threading.Thread(target=_index, name="worldstate-index", daemon=True).start()
+
+
+def _wait_for_ingest(organization_id: str, timeout: float = 3600, interval: float = 2) -> bool:
+    """True once the organization's latest ingest job completes; False if it fails, stops, or times out."""
+    import time
+
+    from sqlalchemy import select
+
+    from app.models import IngestJob
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with session() as database:
+            job = database.scalars(
+                select(IngestJob).where(IngestJob.organization_id == organization_id).order_by(IngestJob.created_at.desc())
+            ).first()
+            status = job.status if job is not None else None
+        if status == "completed":
+            return True
+        if status in {"failed", "cancelled"}:
+            return False
+        time.sleep(interval)
+    return False
 
 
 def create_app(database_url: str | None = None) -> FastAPI:
