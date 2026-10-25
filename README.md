@@ -101,6 +101,12 @@ Tests:
 - `cd apps/excel-addin && npm test`
 - `cd services/api && python -m pytest tests/test_workbook.py`
 
+**Tooltip test.** **Test WorldState Tooltip** at the bottom of the pane needs no backend. It adds a native Excel note to `B3` on the active sheet, using the Notes API (ExcelApi 1.18), and fills the cell light yellow.
+- Hover over B3 to see Excel's note popup.
+- Clicking the button again updates the existing note rather than adding a second one.
+- Older Excel builds without ExcelApi 1.18 show a message and change nothing.
+- **Clear WorldState highlights** restores the fill. The note stays until you delete it in Excel: right-click the cell, then **Delete Note**.
+
 Reset: delete `services/api/worldstate.db` and restart the API. The workbook case `CASE-011` is also added to an existing database on startup. In Excel, click **Clear WorldState highlights**.
 
 ## Document ingestion

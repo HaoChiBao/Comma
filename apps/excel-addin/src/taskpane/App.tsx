@@ -6,6 +6,7 @@ import { LineageGraph } from "./components/LineageGraph";
 import { ScanResults } from "./components/ScanResults";
 import { SourcePanel } from "./components/SourcePanel";
 import { clearHighlights, markCells, settingsStore } from "./office/formatting";
+import { upsertNote } from "./office/notes";
 import { readPrecedents, readSelectedCell, readSelectedRange, readWorkbookId, selectCell, supportsPrecedents } from "./office/selection";
 import { createClient, describeError } from "./services/worldstateApi";
 import type { GraphNode, InspectRequest, ScanResult, SourceDetail, Trace, TraceGraph } from "./types";
@@ -129,6 +130,12 @@ export function App() {
       setNotice(restored ? `Restored the original fill on ${restored} cell(s).` : "No WorldState highlights to clear.");
     });
 
+  const testTooltip = () =>
+    run("Adding note", async () => {
+      const result = await Excel.run((context) => upsertNote(context, settingsStore()));
+      setNotice(`${result.created ? "Added" : "Updated"} the note on ${result.sheet}!${result.address}. Hover over the cell to see it.`);
+    });
+
   const goToCell = (key: string) => run("Selecting", () => Excel.run((context) => selectCell(context, key)));
 
   const openSource = (sourceId: string) =>
@@ -203,6 +210,10 @@ export function App() {
       {scan ? <ScanResults result={scan} onSelectCell={goToCell} /> : null}
 
       <footer>
+        <button className="link" onClick={testTooltip} disabled={!!busy}>
+          Test WorldState Tooltip
+        </button>{" "}
+        ·{" "}
         <button className="link" onClick={clear} disabled={!!busy}>
           Clear WorldState highlights
         </button>
