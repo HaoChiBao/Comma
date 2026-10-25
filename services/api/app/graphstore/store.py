@@ -7,13 +7,14 @@ when every piece of its evidence was already available to this actor.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.graphstore.claims import build_claims, upsert_claims
-from app.graphstore.entities import persist_entities
+from app.graphstore.entities import persist_entities, resolve_document, transaction_external_id, transaction_ids_for
 from app.models import ArtifactVersion, Claim, Fact, GraphEpisode, IngestRecord, Mention, ResolvedEntity, SourceArtifact
 from app.relationships import load_records
 from app.temporal import aware, sha256_text
@@ -265,3 +266,179 @@ def _value(claim, key: str):
     if isinstance(claim, dict):
         return claim.get(key)
     return getattr(claim, key, None)
+
+
+def structure_graph(db: Session, organization_id: str, records: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Vendors, transactions, mentions, and ledger rows for documents already in view.
+
+    Amounts stay off these links. A document that is not in `records` is not copied in.
+    """
+    version_ids = [str(record.get("version_id") or "") for record in records if record.get("version_id")]
+    if not version_ids:
+        return [], []
+    vendors = {
+        row.version_id: row.vendor
+        for row in db.scalars(select(IngestRecord).where(IngestRecord.version_id.in_(version_ids))).all()
+    }
+    mentions = [
+        {"version_id": row.version_id, "mentioned_external_id": row.mentioned_external_id}
+        for row in db.scalars(select(Mention).where(Mention.version_id.in_(version_ids))).all()
+    ]
+    facts = [
+        {
+            "version_id": row.artifact_version_id,
+            "fact_type": row.fact_type,
+            "entity_ref": row.entity_ref,
+            "source_locator": row.source_locator,
+        }
+        for row in db.scalars(select(Fact).where(Fact.artifact_version_id.in_(version_ids), Fact.fact_type != "amount")).all()
+    ]
+    enriched = []
+    for record in records:
+        item = dict(record)
+        item["vendor"] = vendors.get(record.get("version_id"), record.get("vendor") or "")
+        enriched.append(item)
+    return connect_records(organization_id, enriched, mentions, facts)
+
+
+def connect_records(organization_id: str, records: list[dict], mentions: list[dict], facts: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Build entity hubs and every stored link among the records passed in.
+
+    No amount is read from a fact or a hidden document. Locators are kept in full.
+    """
+    nodes: dict[str, dict] = {}
+    edges: dict[tuple[str, str, str], dict] = {}
+    by_external = {str(record.get("external_id") or ""): record for record in records if record.get("external_id")}
+    by_version = {str(record.get("version_id") or ""): record for record in records if record.get("version_id")}
+
+    def artifact(record: dict) -> str:
+        return f"artifact:{record['version_id']}"
+
+    def entity_node(spec: dict) -> str:
+        node_id = f"entity:{spec['id']}"
+        if node_id not in nodes:
+            kind = "VENDOR" if spec.get("kind") == "vendor" else "TRANSACTION"
+            nodes[node_id] = _entity_node(node_id, kind, spec.get("label") or spec.get("external_id") or node_id)
+        return node_id
+
+    def add_edge(source: str, target: str, edge_type: str, explanation: str, *, inferred: bool) -> None:
+        if not source or not target or source == target:
+            return
+        key = (edge_type, source, target)
+        current = edges.get(key)
+        if current is None:
+            edges[key] = {
+                "id": f"ln-{sha256_text(f'{edge_type}|{source}|{target}')[:24]}",
+                "source": source,
+                "target": target,
+                "type": edge_type,
+                "inferred": inferred,
+                "explanation": explanation,
+                "confidence": "high" if not inferred else "medium",
+            }
+            return
+        if explanation and explanation not in current["explanation"]:
+            current["explanation"] = f"{current['explanation']} {explanation}"
+
+    for record in records:
+        external_id = str(record.get("external_id") or "")
+        version_id = str(record.get("version_id") or "")
+        if not external_id or not version_id:
+            continue
+        resolved = resolve_document(
+            organization_id,
+            external_id,
+            str(record.get("kind") or ""),
+            record.get("vendor") or "",
+            list(record.get("references") or []),
+        )
+        source = artifact(record)
+        if resolved.get("transaction"):
+            add_edge(
+                source,
+                entity_node(resolved["transaction"]),
+                "ATTACHED",
+                f"{external_id} is this transaction.",
+                inferred=False,
+            )
+        if resolved.get("vendor"):
+            add_edge(
+                source,
+                entity_node(resolved["vendor"]),
+                "FILED_WITH",
+                f"{external_id} names {resolved['vendor'].get('label') or 'this vendor'}.",
+                inferred=False,
+            )
+        own = transaction_external_id(external_id)
+        for txn_id in sorted(transaction_ids_for(external_id, list(record.get("references") or []))):
+            if txn_id == own:
+                continue
+            spec = resolve_document(organization_id, txn_id, "transaction", None, [])["transaction"]
+            if spec is None:
+                continue
+            target = by_external.get(txn_id)
+            if target is not None and str(target.get("version_id") or "") != version_id:
+                add_edge(source, artifact(target), "CITES", f"{external_id} names {txn_id}.", inferred=False)
+            add_edge(source, entity_node(spec), "CITES", f"{external_id} names {txn_id}.", inferred=False)
+
+    for mention in mentions:
+        source_record = by_version.get(str(mention.get("version_id") or ""))
+        mentioned = str(mention.get("mentioned_external_id") or "").strip()
+        if source_record is None or not mentioned or mentioned == source_record.get("external_id"):
+            continue
+        source = artifact(source_record)
+        target_record = by_external.get(mentioned)
+        if target_record is not None and str(target_record.get("version_id") or "") != source_record.get("version_id"):
+            add_edge(source, artifact(target_record), "MENTIONS", f"{source_record['external_id']} mentions {mentioned}.", inferred=False)
+        spec = resolve_document(organization_id, mentioned, "transaction", None, [])["transaction"]
+        if spec is not None:
+            add_edge(source, entity_node(spec), "MENTIONS", f"{source_record['external_id']} mentions {mentioned}.", inferred=False)
+
+    ledger: dict[tuple[str, str, str], list[str]] = {}
+    for fact in facts:
+        source_record = by_version.get(str(fact.get("version_id") or ""))
+        fact_type = str(fact.get("fact_type") or "").strip()
+        entity_ref = str(fact.get("entity_ref") or "").strip()
+        locator = str(fact.get("source_locator") or "").strip()
+        if source_record is None or not fact_type or not entity_ref or not locator:
+            continue
+        ledger.setdefault((str(source_record["version_id"]), entity_ref, fact_type), []).append(locator)
+    for (version_id, entity_ref, fact_type), locators in ledger.items():
+        source_record = by_version[version_id]
+        source = artifact(source_record)
+        unique = sorted({_without_amounts(locator) for locator in locators})
+        unique = [item for item in unique if item]
+        explanation = f"{fact_type}: " + "; ".join(unique)
+        target_record = by_external.get(entity_ref)
+        if target_record is not None and str(target_record.get("version_id") or "") != version_id:
+            add_edge(source, artifact(target_record), "LEDGER", explanation, inferred=False)
+        spec = resolve_document(organization_id, entity_ref, "transaction", None, [])["transaction"]
+        if spec is not None:
+            add_edge(source, entity_node(spec), "LEDGER", explanation, inferred=True)
+
+    ordered_nodes = [nodes[key] for key in sorted(nodes)]
+    ordered_edges = [edges[key] for key in sorted(edges)]
+    return ordered_nodes, ordered_edges
+
+
+def _without_amounts(text: str) -> str:
+    return " ".join(re.sub(r"\d{1,3}(?:,\d{3})*\.\d{2}", "", text).split())
+
+
+def _entity_node(node_id: str, kind: str, label: str) -> dict:
+    group = "Vendors" if kind == "VENDOR" else "Transactions"
+    return {
+        "id": node_id,
+        "type": kind,
+        "label": label,
+        "title": label,
+        "amount": None,
+        "group": group,
+        "case_id": "",
+        "origin": "entity",
+        "version_id": "",
+        "available_from": None,
+        "document_date": None,
+        "redacted": False,
+        "text": "",
+    }

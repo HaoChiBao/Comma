@@ -37,6 +37,7 @@ export type CompanyGraph = {
   cases: { id: string; title: string; vendor: string; finding: string }[];
   documents: CompanyDocument[];
   corpus: { documents: number; visible: number; on_graph: number };
+  index?: { entities: number; claims: number; mentions: number; ledger_facts: number };
   run: { id: string; status: string; error: string; completed: number; total: number; label: string } | null;
 };
 

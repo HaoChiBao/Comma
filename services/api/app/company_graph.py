@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.graph import KIND_NODE
 from app.models import Actor, ArtifactVersion, Case, Claim, GraphEdge, IngestJob, IngestStep, SourceArtifact
 from app.graphstore.claims import build_claims
-from app.graphstore.store import edges_from_claims, episode_edges, index_counts
+from app.graphstore.store import edges_from_claims, episode_edges, index_counts, structure_graph
 from app.relationships import find_relationships, load_records, merge_edges
 from app.snapshots import AccessError, get_actor
 from app.temporal import exclusion_reason, money
@@ -88,6 +88,13 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
     stored = list(db.scalars(select(Claim).where(Claim.organization_id == organization_id)).all())
     merge_edges(edges, edges_from_claims(stored or build_claims(records), records, as_of, visible_ids))
     merge_edges(edges, episode_edges(db, records, {record["external_id"] for record in records}))
+    extra_nodes, extra_edges = structure_graph(db, organization_id, records)
+    present = {node["id"] for node in nodes}
+    for extra in extra_nodes:
+        if extra["id"] not in present:
+            nodes.append(extra)
+            present.add(extra["id"])
+    merge_edges(edges, extra_edges)
     return {
         "organization_id": organization_id,
         "as_of": as_of.isoformat(),

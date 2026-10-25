@@ -104,19 +104,13 @@ export default function HomePage() {
         ) : null}
         <EvidenceGraph nodes={shownNodes} edges={shownEdges} selected={selected} focused={focus} onSelect={setSelected} />
         <div className="legend">
-          <span><i className="swatch supports" /> Mentions</span>
-          <span><i className="swatch supports" /> Supports</span>
-          <span><i className="swatch reconciles" /> Reconciles</span>
-          <span><i className="swatch contradicts" /> Contradicts</span>
-          <span><i className="swatch governs" /> Governs</span>
-          <span><i className="swatch supports" /> Possible source</span>
-          <span><i className="swatch governs" /> Ambiguous</span>
+          <span>Scroll to zoom. Drag the background to pan. Drag a node to pull its links.</span>
         </div>
       </section>
       <aside className="panel inspector">
         <div className="eyebrow">Knowledge graph</div>
         <h2>{node?.redacted ? "Blocked" : node?.amount ? `$${node.amount}` : "Select a document"}</h2>
-        <p className="muted">{graph ? `${graph.corpus.visible} company documents in this snapshot · ${graph.corpus.documents} in the file` : "Loading the company documents…"}</p>
+        <p className="muted">{graph ? `${graph.corpus.visible} documents · ${graph.nodes.length} nodes · ${graph.edges.length} links` : "Loading the company documents…"}</p>
         {graph?.run && graph.run.status !== "completed" ? <p className="warn">{graph.run.label || graph.run.status} · {graph.run.completed}/{graph.run.total}</p> : null}
         {activeCase ? (
           <div className="finding">
@@ -129,8 +123,17 @@ export default function HomePage() {
         <dl>
           <dt>Document</dt>
           <dd>{node?.redacted ? "Hidden until it is inside this snapshot" : node?.label || "—"}</dd>
-          <dt>Relationship</dt>
-          <dd>{graph?.edges.find((edge) => edge.source === selected || edge.target === selected)?.explanation || "None selected"}</dd>
+          <dt>Relationships</dt>
+          <dd>
+            <div className="link-list">
+              {linksFor(graph, selected).length === 0 ? "None selected" : linksFor(graph, selected).map((edge) => (
+                <p key={edge.id}>
+                  <strong>{edge.type}</strong> {otherEnd(graph, selected, edge)}
+                  <span>{edge.explanation}</span>
+                </p>
+              ))}
+            </div>
+          </dd>
           <dt>Available from</dt>
           <dd>{node?.available_from?.replace("T", " ").slice(0, 16) || "Unknown"}</dd>
           <dt>Source</dt>
@@ -151,7 +154,7 @@ export default function HomePage() {
         <div className="case-list">
           <button className={focus ? "" : "primary"} onClick={() => setFocus(null)}>
             <strong>All cases</strong>
-            <span>{graph ? `${graph.nodes.length} documents` : ""}</span>
+            <span>{graph ? `${graph.corpus.visible} documents` : ""}</span>
           </button>
           {(graph?.cases || []).map((item) => (
             <button key={item.id} className={focus === item.id ? "primary" : ""} onClick={() => chooseCase(item.id)}>
@@ -164,6 +167,16 @@ export default function HomePage() {
       <IngestModal open={open} job={job} onClose={() => setOpen(false)} onStarted={(next) => { setJob(next); setOpen(true); }} />
     </main>
   );
+}
+
+function linksFor(graph: CompanyGraph | null, selected: string | null) {
+  if (!graph || !selected) return [];
+  return graph.edges.filter((edge) => edge.source === selected || edge.target === selected);
+}
+
+function otherEnd(graph: CompanyGraph | null, selected: string | null, edge: { source: string; target: string }) {
+  const id = edge.source === selected ? edge.target : edge.source;
+  return graph?.nodes.find((node) => node.id === id)?.label || id;
 }
 
 function filteredDocuments(graph: CompanyGraph | null, query: string) {

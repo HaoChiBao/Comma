@@ -2,11 +2,31 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GraphEdge, GraphNode } from "@/lib/api";
+import { ObsidianGraph } from "@/components/ObsidianGraph";
 
 type Point = { x: number; y: number };
 type Label = { id: string; x: number; y: number };
 
 export function EvidenceGraph({
+  nodes,
+  edges,
+  selected,
+  focused,
+  onSelect,
+}: {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  selected: string | null;
+  focused?: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (nodes.length > 30) {
+    return <ObsidianGraph nodes={nodes} edges={edges} selected={selected} focused={focused} onSelect={onSelect} />;
+  }
+  return <CardGraph nodes={nodes} edges={edges} selected={selected} focused={focused} onSelect={onSelect} />;
+}
+
+function CardGraph({
   nodes,
   edges,
   selected,
@@ -36,7 +56,6 @@ export function EvidenceGraph({
   const [positions, setPositions] = useState<Record<string, Point>>(arranged.points);
   useEffect(() => setPositions(arranged.points), [arranged]);
   const placed = { ...arranged.points, ...positions };
-
   const boardWidth = Math.max(arranged.w, size.w);
   const boardHeight = Math.max(arranged.h, size.h);
   const ox = compact ? 42 : 70;
