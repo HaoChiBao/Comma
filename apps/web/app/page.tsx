@@ -17,6 +17,7 @@ import {
   type InferredLink,
   type Precedent,
 } from "@/lib/investigate";
+import { parseGraphDeepLink } from "@/lib/deep-link";
 
 function toUtcIso(date: Date) {
   return `${date.toISOString().slice(0, 19)}+00:00`;
@@ -26,7 +27,7 @@ export default function HomePage() {
   const [graph, setGraph] = useState<CompanyGraph | null>(null);
   const [allActors, setAllActors] = useState<ActorRow[]>([]);
   const [actorId, setActorId] = useState("actor-maya");
-  const [asOf] = useState(() => toUtcIso(new Date()));
+  const [asOf, setAsOf] = useState(() => toUtcIso(new Date()));
   const [mode, setMode] = useState("audit");
   const [viewMode, setViewMode] = useState<"web" | "atom">("web");
   const [selected, setSelected] = useState<string | null>(null);
@@ -54,18 +55,38 @@ export default function HomePage() {
   const [streamNodeId, setStreamNodeId] = useState<string | null>(null);
   const [narrating, setNarrating] = useState(false);
   const reviewToken = useRef(0);
+  const [deepLinkReady, setDeepLinkReady] = useState(false);
+  const [actorsReady, setActorsReady] = useState(false);
+  const [caseGraphLoaded, setCaseGraphLoaded] = useState(false);
+  const requestedNodeId = useRef<string | null>(null);
+
+  // Apply URL context before fetching graph data so actor and organization stay aligned.
+  useEffect(() => {
+    const deepLink = parseGraphDeepLink(window.location.search);
+    requestedNodeId.current = deepLink.selected;
+    if (deepLink.focus) setFocus(deepLink.focus);
+    if (deepLink.actorId) setActorId(deepLink.actorId);
+    if (deepLink.asOf) setAsOf(deepLink.asOf);
+    if (deepLink.mode) setMode(deepLink.mode);
+    if (deepLink.viewMode) setViewMode(deepLink.viewMode);
+    setDeepLinkReady(true);
+  }, []);
 
   // 1. Fetch available actors
   useEffect(() => {
     api<ActorRow[]>("/api/v1/actors")
       .then((people) => {
         setAllActors(people);
-        if (!people.some((p) => p.id === actorId) && people.length > 0) {
+        const requestedActor = new URLSearchParams(window.location.search).get("actor_id");
+        if (requestedActor && people.some((person) => person.id === requestedActor)) {
+          setActorId(requestedActor);
+        } else if (!people.some((p) => p.id === actorId) && people.length > 0) {
           const defaultActor = people.find((p) => p.id === "actor-maya") || people[0];
           setActorId(defaultActor.id);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setActorsReady(true));
   }, []);
 
   const currentActor = allActors.find((a) => a.id === actorId);
@@ -73,7 +94,7 @@ export default function HomePage() {
 
   // 2. Fetch full company graph
   useEffect(() => {
-    if (!actorId) return;
+    if (!deepLinkReady || !actorsReady || !actorId) return;
     const view = currentActor?.role === "auditor" ? "auditor" : "agent";
     const params = new URLSearchParams({
       organization_id: organizationId,
@@ -88,15 +109,18 @@ export default function HomePage() {
         setError("");
       })
       .catch((reason: Error) => setError(reason.message));
-  }, [actorId, organizationId, asOf, mode, job?.status, pulse]);
+  }, [deepLinkReady, actorsReady, actorId, organizationId, asOf, mode, job?.status, pulse]);
 
   // 3. When focused on a specific case, fetch its snapshot
   useEffect(() => {
+    if (!deepLinkReady || !actorsReady) return;
     if (!focus || !actorId) {
       setCaseNodes([]);
       setCaseEdges([]);
+      setCaseGraphLoaded(false);
       return;
     }
+    setCaseGraphLoaded(false);
     const view = currentActor?.role === "auditor" ? "auditor" : "agent";
     api<{ id: string; manifest_hash: string }>("/api/v1/snapshots", {
       method: "POST",
@@ -114,12 +138,35 @@ export default function HomePage() {
 
         setCaseNodes(snapGraph.nodes);
         setCaseEdges(snapGraph.edges);
+        setCaseGraphLoaded(true);
       })
       .catch(() => {
         setCaseNodes([]);
         setCaseEdges([]);
+        setCaseGraphLoaded(true);
       });
-  }, [focus, actorId, asOf, mode]);
+  }, [deepLinkReady, actorsReady, focus, actorId, asOf, mode]);
+
+  // Select a deep-linked node only after confirming it is visible in the selected graph.
+  useEffect(() => {
+    const nodeId = requestedNodeId.current;
+    if (!nodeId || !deepLinkReady || !actorsReady) return;
+    if (focus) {
+      if (!caseGraphLoaded) return;
+      requestedNodeId.current = null;
+      if (caseNodes.some((node) => node.id === nodeId)) {
+        setSelected(nodeId);
+        setInspectorOpen(true);
+      }
+      return;
+    }
+    if (!graph) return;
+    requestedNodeId.current = null;
+    if (graph.nodes.some((node) => node.id === nodeId)) {
+      setSelected(nodeId);
+      setInspectorOpen(true);
+    }
+  }, [deepLinkReady, actorsReady, focus, caseGraphLoaded, caseNodes, graph]);
 
   const activeNodes = useMemo(() => {
     if (focus && caseNodes.length > 0) return caseNodes;

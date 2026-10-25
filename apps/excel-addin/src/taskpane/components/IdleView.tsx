@@ -30,13 +30,13 @@ export function IdleView({
           <span className="big-ref">Reading selection…</span>
         ) : selection.single ? (
           <>
-            <span className="big-ref">{selection.cell.key}</span>
+            <span className="big-ref">{selection.cell.address} in {selection.cell.sheetName}</span>
             <span className="mute">{[selection.vendor, selection.cell.displayText].filter(Boolean).join(" · ") || "Empty cell"}</span>
           </>
         ) : (
           <>
             <span className="big-ref">
-              {selection.sheetName}!{selection.address}
+              {selection.address} in {selection.sheetName}
             </span>
             <span className="mute">Select one cell</span>
           </>

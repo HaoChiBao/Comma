@@ -56,7 +56,7 @@ function SummaryPlaceholder() {
     <div className="summary-skeleton" aria-busy="true" aria-label="Reading this node">
       {["What it is", "Relationships", "Connected to", "Risks"].map((label) => (
         <div key={label}>
-          <span className="summary-skeleton-label">{label}</span>
+          <span className="summary-skeleton-label"><strong>{label}</strong></span>
           <span className="summary-skeleton-line" />
           <span className="summary-skeleton-line short" />
         </div>
@@ -90,7 +90,7 @@ export function NodeSummary({
         {sections.map(([label, text]) =>
           text ? (
             <div key={label}>
-              <dt>{label}</dt>
+              <dt><strong>{label}</strong></dt>
               <dd>{linkRecords(text, nodes, summary.node_id, onOpen)}</dd>
             </div>
           ) : null,

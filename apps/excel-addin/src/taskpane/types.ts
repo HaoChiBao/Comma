@@ -115,6 +115,8 @@ export type SidebarTrace = Pick<Trace, "trace_id" | "snapshot_id" | "manifest_ha
   headline: string;
   formula_display: string;
   calc: string;
+  /** Canonical company-graph node for this cell's own visible RECORDED_AS evidence. */
+  full_graph_node_id: string | null;
   items: SidebarTraceItem[];
   timeline: SidebarTimelineEvent[];
 };

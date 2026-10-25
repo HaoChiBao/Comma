@@ -1076,11 +1076,10 @@ h1, h2, h3 {
 .node-summary p { margin: 0; }
 .node-summary dt {
   margin: 0 0 0.22rem;
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 .node-summary dd { margin: 0; line-height: 1.55; }
 button.summary-ref {
@@ -1126,8 +1125,10 @@ button.summary-ref:hover {
 .summary-skeleton-label {
   display: block;
   margin-bottom: 0.28rem;
-  font-size: 0.72rem;
-  color: var(--dim);
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.02em;
 }
 .summary-skeleton-line {
   display: block;

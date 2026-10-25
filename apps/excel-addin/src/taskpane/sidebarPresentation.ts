@@ -160,6 +160,7 @@ export function toSidebarTrace(trace: Trace, graph: TraceGraph, request: Inspect
   }), ...withheldItems(trace)];
   const formulaDisplay = formula || trace.cell.display_text || (trace.cell.raw_value == null ? "" : String(trace.cell.raw_value));
   const calc = inputs.map((item) => `${item.abbr} ${item.amount == null ? "—" : formatMoney(item.amount)}`).join(" · ");
+  const recordedEvidence = available.find((item) => item.cell === trace.cell.key && item.relationship === "RECORDED_AS");
   return {
     trace_id: trace.trace_id,
     snapshot_id: trace.snapshot_id,
@@ -178,6 +179,7 @@ export function toSidebarTrace(trace: Trace, graph: TraceGraph, request: Inspect
     headline: trace.summary,
     formula_display: formulaDisplay,
     calc,
+    full_graph_node_id: recordedEvidence ? `artifact:${recordedEvidence.source_id}` : null,
     items,
     timeline: timelineFor(trace),
   };

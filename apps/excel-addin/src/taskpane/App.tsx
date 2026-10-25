@@ -13,6 +13,7 @@ import type { Actor, AvailableEvidence, InspectRequest, ScanFinding, SourceDetai
 import { COMPANY_ORG, DEFAULT_ACTOR, REASON_LABEL, formatDate, formatMoney } from "./view";
 import { AS_OF_PRESETS, LOADING_MS, asOfPreset, defaultSelection, loadingDone, loadingStep } from "./sidebarView";
 import { toSidebarTrace } from "./sidebarPresentation";
+import { fullGraphUrl, openGraphUrl } from "./fullGraphLink";
 
 const client = createClient();
 type Phase = "idle" | "loading" | "done";
@@ -335,6 +336,16 @@ export function App() {
 
   const selectionCell = selection?.single ? selection.cell : null;
   const sidebarTrace = trace && graph && request ? toSidebarTrace(trace, graph, request) : null;
+  function openFullGraph() {
+    if (!sidebarTrace) return;
+    showNotice("Opening full graph in your browser…");
+    const opened = openGraphUrl(
+      fullGraphUrl(sidebarTrace),
+      typeof Office !== "undefined" ? Office : undefined,
+      (url, target) => window.open(url, target),
+    );
+    if (!opened) showNotice("Excel blocked the browser window. Allow pop-ups and try again.");
+  }
 
   return (
     <div className="ws">
@@ -373,6 +384,7 @@ export function App() {
           selected={selectedItem}
           onSelect={setSelectedItem}
           onOpenSource={openSource}
+          onOpenFullGraph={openFullGraph}
           onAddNote={noteCurrent}
           onAction={act}
           busy={!!busy}
