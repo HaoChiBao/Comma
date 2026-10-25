@@ -44,6 +44,10 @@ export class FakeExcel {
             fake.notes.set(key, value);
             fake.writes.push(`note update ${key}`);
           },
+          delete: () => {
+            fake.notes.delete(key);
+            fake.writes.push(`note delete ${key}`);
+          },
         };
       },
     });

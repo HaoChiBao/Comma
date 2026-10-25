@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError, createClient, describeError } from "../src/taskpane/services/worldstateApi";
 import type { Trace, TraceGraph } from "../src/taskpane/types";
-import { comparisonLabel, evidenceView, formatMoney, layoutGraph, STATUS_VIEW } from "../src/taskpane/view";
+import { comparisonLabel, evidenceView, formatMoney, layoutGraph, originLine, STATUS_VIEW } from "../src/taskpane/view";
 
 function respond(status: number, body: unknown): typeof fetch {
   return async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -12,7 +12,8 @@ const trace: Trace = {
   snapshot_id: "snap_1",
   manifest_hash: "abc123abc123abc123",
   as_of: "2025-09-30T23:59:59-07:00",
-  actor_id: "actor-maya",
+  actor_id: "actor-decagon-finance",
+  case_id: "C01",
   cell: {
     key: "Accruals!D3",
     sheet_name: "Accruals",
@@ -30,6 +31,7 @@ const trace: Trace = {
   summary: "EM-208 shows $160.00; this cell is $150.00.",
   difference: { amount: "10.00", currency: "USD" },
   unknowns: [],
+  origin: { claim_type: "unexplained", status: "unexplained", formulas: [], explanation: "No earlier visible amount or sum equals ACR-C01-202509.", evidence: [], knowable_from: "2025-09-30T17:00:00+00:00" },
   lineage: [
     { from: "Accruals!B3", to: "Accruals!D3", kind: "FORMULA_DEPENDS_ON", verified: true },
     { from: "Accruals!C3", to: "Accruals!D3", kind: "FORMULA_DEPENDS_ON", verified: true },
@@ -56,6 +58,7 @@ function available(cell: string, source_id: string, amount: string, relationship
     document_date: "2025-09-12T16:00:00+00:00",
     available_at: "2025-09-12T16:00:00+00:00",
     locator: "total",
+    ledger_locator: null,
     snippet: "",
     relationship,
     link_status,
@@ -88,6 +91,13 @@ describe("API client", () => {
     expect(describeError(error)).toMatch(/not reachable.*not changed/);
   });
 
+  it("explains that the company documents are still loading", async () => {
+    const client = createClient("", respond(503, { code: "INDEX_NOT_READY", message: "still reading", request_id: "req_2" }));
+    const error = await client.inspect({} as any).catch((err) => err);
+    expect(error.code).toBe("INDEX_NOT_READY");
+    expect(describeError(error)).toMatch(/still reading the company documents/);
+  });
+
   it("treats a non-JSON 502 from the proxy as backend unavailable", async () => {
     const client = createClient("", async () => new Response("Bad gateway", { status: 502 }));
     const error = await client.health().catch((err) => err);
@@ -109,6 +119,16 @@ describe("view model", () => {
     ]);
     expect(view.excluded).toHaveLength(1);
     expect(JSON.stringify(view.excluded)).not.toMatch(/158/);
+  });
+
+  it("describes the stored origin claim", () => {
+    expect(originLine(trace.origin)).toBe("Origin: no earlier source or sum accounts for this amount.");
+    expect(originLine({ ...trace.origin!, claim_type: "source_candidate", status: "exact", evidence: ["MSG-0004"] })).toBe("Origin: matches MSG-0004, which was available first.");
+    expect(originLine({ ...trace.origin!, claim_type: "source_candidate", status: "ambiguous", evidence: ["CTR-0010", "PO-C10-1123"] })).toBe(
+      "Origin: matches CTR-0010, PO-C10-1123; any of them could be the source.",
+    );
+    expect(originLine({ ...trace.origin!, claim_type: "derived_from", status: "exact", formulas: ["PO-C09-1123 minus ACR-C09-202509"] })).toBe("Origin: equals PO-C09-1123 minus ACR-C09-202509.");
+    expect(originLine(null)).toBeNull();
   });
 
   it("describes comparisons", () => {

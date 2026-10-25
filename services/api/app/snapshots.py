@@ -32,8 +32,8 @@ def versions(db: Session) -> list[ArtifactVersion]:
     return list(db.scalars(select(ArtifactVersion).options(selectinload(ArtifactVersion.artifact), selectinload(ArtifactVersion.grants))).all())
 
 
-def hidden_ids(case: Case, mode: str) -> set[str]:
-    if mode == "pre_decision":
+def hidden_ids(case: Case | None, mode: str) -> set[str]:
+    if case is not None and mode == "pre_decision":
         return {case.decision_version_id}
     return set()
 
@@ -67,6 +67,30 @@ def create_snapshot(db: Session, *, case_id: str, actor_id: str, as_of: datetime
     )
     if existing is not None:
         return existing
+    return _freeze(db, actor, case, as_of, mode)
+
+
+def create_org_snapshot(db: Session, *, actor_id: str, as_of: datetime, mode: str = "audit") -> Snapshot:
+    """A sealed allowlist for everything the actor's organization held at `as_of`, not tied to one case."""
+    if mode != "audit":
+        raise AccessError("NOT_IN_SNAPSHOT")
+    actor = get_actor(db, actor_id)
+    # A NULL case_id never collides in the unique key, so the lookup is what keeps this idempotent.
+    existing = db.scalar(
+        select(Snapshot).where(
+            Snapshot.case_id.is_(None),
+            Snapshot.organization_id == actor.organization_id,
+            Snapshot.actor_id == actor_id,
+            Snapshot.as_of == as_of,
+            Snapshot.mode == mode,
+        )
+    )
+    if existing is not None:
+        return existing
+    return _freeze(db, actor, None, as_of, mode)
+
+
+def _freeze(db: Session, actor: Actor, case: Case | None, as_of: datetime, mode: str) -> Snapshot:
     hidden = hidden_ids(case, mode)
     allowed: list[str] = []
     counts: dict[str, int] = {}
@@ -84,7 +108,7 @@ def create_snapshot(db: Session, *, case_id: str, actor_id: str, as_of: datetime
     )
     snapshot = Snapshot(
         id=f"snap_{uuid4().hex[:16]}",
-        case_id=case.id,
+        case_id=case.id if case is not None else None,
         organization_id=actor.organization_id,
         actor_id=actor.id,
         as_of=as_of,
@@ -120,7 +144,7 @@ def denial_code(db: Session, snapshot: Snapshot, version_id: str) -> str:
     if version is None:
         return "NOT_IN_SNAPSHOT"
     actor = get_actor(db, snapshot.actor_id)
-    case = get_case(db, snapshot.case_id)
+    case = get_case(db, snapshot.case_id) if snapshot.case_id else None
     reason = classify(version, actor, snapshot.as_of, snapshot.mode, hidden_ids(case, snapshot.mode))
     return reason or "NOT_IN_SNAPSHOT"
 

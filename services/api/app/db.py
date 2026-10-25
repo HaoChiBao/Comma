@@ -24,6 +24,14 @@ def configure(database_url: str) -> None:
     _engine = create_engine(database_url, future=True, **kwargs)
     _Session = sessionmaker(_engine, expire_on_commit=False, future=True)
     Base.metadata.create_all(_engine)
+    if database_url.startswith("postgres"):
+        _migrate_postgres()
+
+
+def _migrate_postgres() -> None:
+    """Column changes that create_all does not make on tables that already exist."""
+    with _engine.begin() as conn:
+        conn.execute(text("ALTER TABLE worldstate.snapshots ALTER COLUMN case_id DROP NOT NULL"))
 
 
 def _prepare_postgres_schema(database_url: str) -> None:

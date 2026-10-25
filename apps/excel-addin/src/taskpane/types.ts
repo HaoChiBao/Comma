@@ -1,6 +1,6 @@
 export type Status = "review" | "unknown" | "supported";
 
-export type Relationship = "SUPPORTED_BY" | "CONFLICTS_WITH" | "POSSIBLY_RELATED_TO";
+export type Relationship = "SUPPORTED_BY" | "CONFLICTS_WITH" | "POSSIBLY_RELATED_TO" | "RECORDED_AS";
 
 export type Comparison =
   | "match"
@@ -24,6 +24,8 @@ export type AvailableEvidence = {
   document_date: string;
   available_at: string | null;
   locator: string;
+  /** The ledger row that records this document's own amount, e.g. `purchase_order_headers.csv:PO-C01-1123`. */
+  ledger_locator: string | null;
   snippet: string;
   relationship: Relationship;
   link_status: "verified" | "candidate";
@@ -43,12 +45,25 @@ export type ExcludedEvidence = {
 
 export type Evidence = AvailableEvidence | ExcludedEvidence;
 
+/** The stored claim about where an accrual's amount could come from, kept only when all its evidence is visible. */
+export type Origin = {
+  claim_type: "derived_from" | "source_candidate" | "unexplained";
+  status: "exact" | "ambiguous" | "unexplained";
+  formulas: string[];
+  explanation: string;
+  evidence: string[];
+  knowable_from: string;
+};
+
+export type Actor = { id: string; name: string; role: string; organization_id: string };
+
 export type Trace = {
   trace_id: string;
   snapshot_id: string;
   manifest_hash: string;
   as_of: string;
   actor_id: string;
+  case_id: string | null;
   cell: {
     key: string;
     sheet_name: string;
@@ -66,6 +81,7 @@ export type Trace = {
   summary: string;
   difference: { amount: string; currency: string } | null;
   unknowns: string[];
+  origin: Origin | null;
   lineage: { from: string; to: string; kind: "FORMULA_DEPENDS_ON"; verified: boolean }[];
   evidence: Evidence[];
 };
@@ -87,7 +103,7 @@ export type GraphEdge = {
   id: string;
   source: string;
   target: string;
-  type: Relationship | "FORMULA_DEPENDS_ON" | "EXCLUDED";
+  type: Relationship | "FORMULA_DEPENDS_ON" | "EXCLUDED" | "MENTIONS" | "SOURCE_CANDIDATE" | "DERIVED_FROM";
   verified: boolean;
   inferred: boolean;
   locator?: string;
@@ -98,6 +114,7 @@ export type TraceGraph = { trace_id: string; as_of: string; nodes: GraphNode[]; 
 
 export type ScanFinding = {
   cell: string;
+  case_id: string | null;
   sheet_name: string;
   address: string;
   status: Status;
@@ -125,7 +142,7 @@ export type SourceDetail = {
   document_date: string;
   available_at: string | null;
   availability_evidence: string;
-  facts: { fact_id: string; amount: string; currency: string; locator: string }[];
+  facts: { fact_id: string; amount: string; currency: string; locator: string; fact_type: string }[];
   trace_id: string;
   as_of: string;
 };
@@ -140,6 +157,7 @@ export type InspectRequest = {
   direct_precedents: string[];
   precedent_values: Record<string, unknown>;
   as_of: string;
+  actor_id: string;
 };
 
 export type ScanRequest = {
@@ -148,4 +166,5 @@ export type ScanRequest = {
   range_address: string;
   cells: { address: string; raw_value: unknown; formula: string }[];
   as_of: string;
+  actor_id: string;
 };
