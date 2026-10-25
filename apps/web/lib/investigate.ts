@@ -3,6 +3,7 @@ import type { GraphNode } from "@/lib/api";
 export type InvestigationStep = {
   kind: "Thinking" | "Action" | "Verdict";
   text: string;
+  lines?: string[];
 };
 
 export type AgentSuggestion = {
@@ -135,11 +136,11 @@ export function buildInvestigation(input: {
   const laterSame = same.filter((item) => item.node.amount && isLater(item.node, node));
   const vendor = input.cases.find((item) => item.id && item.id === node.case_id)?.vendor || "";
 
+  const compared = dedupeLinked(earlierSame.length ? earlierSame : same.length ? same : exactEarlier);
   const steps: InvestigationStep[] = [
-    { kind: "Thinking", text: thinkingSearch(node, vendor, earlierSame) },
-    { kind: "Thinking", text: thinkingLinks(node, linked) },
-    { kind: "Action", text: actionRetrieved(node, same, exactEarlier) },
-    { kind: "Verdict", text: verdict(node, earlierSame, laterSame, exactEarlier, same) },
+    { kind: "Thinking", text: thinkingReview(node, vendor, earlierSame) },
+    { kind: "Action", text: actionRetrieved(node, compared), lines: actionLines(compared, node) },
+    { kind: "Verdict", text: verdict(node, earlierSame, laterSame, exactEarlier) },
   ];
 
   const suggestions = ruleOn("visibility:snapshot")
@@ -220,67 +221,54 @@ function pairDeprecated(precedents: Precedent[], anchorId: string, nodeId: strin
   );
 }
 
-function thinkingSearch(node: GraphNode, vendor: string, earlierSame: Linked[]) {
-  const who = vendor ? `${vendor} in ${node.case_id || "this snapshot"}` : node.case_id || node.label;
-  const marked = node.origin === "unexplained" ? ` ${node.label} is marked unexplained.` : "";
-  if (earlierSame.length === 0) {
-    return `Searching linked records for ${who} that are already in this snapshot.${marked}`;
-  }
-  const dates = earlierSame
-    .map((item) => stamp(item.node))
-    .filter((item): item is string => Boolean(item))
-    .sort();
-  const span = dates.length ? `, knowable from ${prettyDate(dates[0])} to ${prettyDate(dates[dates.length - 1])}` : "";
-  return `Searching earlier amounts for ${who}${span}.${marked}`;
-}
-
-function thinkingLinks(node: GraphNode, linked: Linked[]) {
-  if (linked.length === 0) return `No other record in this snapshot links to ${node.label}.`;
-  const byType = new Map<string, string[]>();
-  for (const item of linked) {
-    for (const type of item.types) {
-      const names = byType.get(type) || [];
-      if (!names.includes(item.node.label)) names.push(item.node.label);
-      byType.set(type, names);
-    }
-  }
-  const parts = [...byType.entries()].map(([type, names]) => `${type} to ${joinNames(names)}`);
-  return `Links on ${node.label}: ${parts.join("; ")}.`;
-}
-
-function actionRetrieved(node: GraphNode, same: Linked[], exactEarlier: Linked[]) {
-  const named = dedupeLinked([...same, ...exactEarlier]);
-  if (named.length === 0) return `Retrieved no other linked record for ${node.label} in this snapshot.`;
-  return `Retrieved ${named.length} records already in this snapshot: ${named.map(describe).join(", ")}.`;
-}
-
-function verdict(node: GraphNode, earlierSame: Linked[], laterSame: Linked[], exactEarlier: Linked[], same: Linked[]) {
+function thinkingReview(node: GraphNode, vendor: string, earlierSame: Linked[]) {
+  const who = vendor && node.case_id ? `${node.case_id} for ${vendor}` : node.case_id || vendor || "this case";
   if (!node.amount) {
-    const checked = same.length ? `Checked ${same.map(describe).join(", ")}.` : `Checked links, amounts, and dates on ${node.label}.`;
-    return `${checked} No recorded amount is on ${node.label}, so there is no exact-match candidate to compare and nothing further to add.`;
+    return `${node.label} has no amount. The review is limited to the other records already visible for ${who}.`;
   }
-  const recorded = ` ${node.label} records ${dollars(node.amount)}.`;
-  const earlierClause = earlierSame.length
-    ? ` Earlier visible amounts in ${node.case_id || "this case"} are ${earlierSame.map(describe).join(" and ")}.`
-    : ` No earlier visible amount is linked in ${node.case_id || "this case"}.`;
-  let match = "";
+  const mismatched = earlierSame.filter((item) => item.node.amount && !moneyEqual(item.node.amount, node.amount));
+  if (earlierSame.length === 0) {
+    return `${node.label} records ${dollars(node.amount)}. Nothing earlier in ${who} is available to compare.`;
+  }
+  if (mismatched.length === 0) {
+    return `${node.label} records ${dollars(node.amount)}. The earlier amounts in ${who} match it.`;
+  }
+  const spread = amountSpread([node, ...earlierSame.map((item) => item.node)]);
+  const range = spread ? ` They run from ${spread.low} to ${spread.high}.` : "";
+  const count = mismatched.length === 1 ? "One earlier amount" : `${countWord(mismatched.length)} earlier amounts`;
+  const verb = mismatched.length === 1 ? "does" : "do";
+  return `${node.label} records ${dollars(node.amount)}. ${count} in ${who} ${verb} not match it.${range}`;
+}
+
+function actionRetrieved(node: GraphNode, compared: Linked[]) {
+  if (compared.length === 0) return `No other record in this snapshot is linked to ${node.label}.`;
+  const word = compared.length === 1 ? "record" : "records";
+  return `Compared ${compared.length} ${word} already visible with ${node.label}.`;
+}
+
+function verdict(node: GraphNode, earlierSame: Linked[], laterSame: Linked[], exactEarlier: Linked[]) {
+  if (!node.amount) {
+    return `There is no amount on ${node.label} to reconcile.`;
+  }
+  const sentences: string[] = [];
   if (exactEarlier.length === 0) {
-    match = " No earlier visible amount equals the recorded cost, so nothing here is a source candidate.";
+    sentences.push(`No earlier visible amount equals ${dollars(node.amount)}.`);
   } else if (exactEarlier.length === 1) {
     const hit = exactEarlier[0];
     const where = hit.node.case_id && hit.node.case_id !== node.case_id ? ` in ${hit.node.case_id}` : "";
-    match = ` One earlier visible amount equals ${dollars(node.amount)}: ${describe(hit)}${where}. A single exact match is only a candidate, not proof it was the source.`;
+    sentences.push(`${describe(hit)}${where} equals ${dollars(node.amount)}. One match is a candidate, not proof it was the source.`);
   } else {
-    match = ` Several earlier visible amounts equal ${dollars(node.amount)}: ${exactEarlier.map((item) => item.node.label).join(", ")}. More than one match leaves the source ambiguous.`;
+    sentences.push(`${exactEarlier.map((item) => item.node.label).join(", ")} all equal ${dollars(node.amount)}. More than one match leaves the source ambiguous.`);
   }
-  const conflicts = earlierSame.filter((item) => item.types.includes("CONTRADICTS") && !moneyEqual(item.node.amount, node.amount));
-  const conflictClause = conflicts.length
-    ? ` ${conflicts.map((item) => item.node.label).join(" and ")} ${conflicts.length === 1 ? "is" : "are"} linked as CONTRADICTS and ${conflicts.length === 1 ? "does" : "do"} not equal the recorded cost.`
-    : "";
-  const laterClause = laterSame.length
-    ? ` ${laterSame.map(describe).join(", ")} ${laterSame.length === 1 ? "is" : "are"} linked and knowable after ${prettyDate(stamp(node) || "")}.`
-    : "";
-  return `${recorded}${earlierClause}${match}${conflictClause}${laterClause}`.trim();
+  const mismatches = earlierSame.filter((item) => item.node.amount && !moneyEqual(item.node.amount, node.amount));
+  if (mismatches.length > 0) {
+    sentences.push(`${mismatches.map((item) => `${item.node.label} is ${deltaPhrase(item.node.amount, node.amount)}`).join(". ")}.`);
+  }
+  if (laterSame.length > 0) {
+    const verb = laterSame.length === 1 ? "is" : "are";
+    sentences.push(`${laterSame.map(describe).join(", ")} ${verb} knowable after ${prettyDate(stamp(node) || "")}.`);
+  }
+  return sentences.join(" ");
 }
 
 function canonicalLinks(
@@ -378,11 +366,46 @@ function describe(item: Linked) {
   return item.node.amount ? `${item.node.label} ${dollars(item.node.amount)}` : item.node.label;
 }
 
-function joinNames(names: string[]) {
-  const shown = names.slice(0, 6);
-  const extra = names.length - shown.length;
-  const body = shown.join(", ");
-  return extra > 0 ? `${body}, and ${extra} more` : body;
+function actionLines(compared: Linked[], node: GraphNode) {
+  const shown = compared.slice(0, 6);
+  const extra = compared.length - shown.length;
+  const lines = shown.map(recordLine);
+  if (extra > 0) lines.push(`${extra} more in ${node.case_id || "this case"}`);
+  return lines;
+}
+
+function recordLine(item: Linked) {
+  const amount = item.node.amount ? dollars(item.node.amount) : "No amount";
+  const date = stamp(item.node) ? prettyDate(stamp(item.node)) : "Date unknown";
+  return `${item.node.label} · ${amount} · ${date}`;
+}
+
+function amountSpread(nodes: GraphNode[]) {
+  const values = nodes
+    .map((item) => (item.amount ? Number(item.amount) : NaN))
+    .filter((value) => Number.isFinite(value));
+  if (values.length < 2) return null;
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  if (Math.abs(high - low) < 0.001) return null;
+  return { low: money(low), high: money(high) };
+}
+
+function deltaPhrase(other: string | null, focus: string | null) {
+  const left = Number(other);
+  const right = Number(focus);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return "a different amount";
+  const diff = Math.abs(left - right);
+  const direction = left > right ? "higher" : "lower";
+  return `${money(diff)} ${direction}`;
+}
+
+function money(value: number) {
+  return `$${value.toFixed(2)}`;
+}
+
+function countWord(count: number) {
+  return ["One", "Two", "Three", "Four", "Five", "Six"][count - 1] || String(count);
 }
 
 function prettyDate(iso: string) {

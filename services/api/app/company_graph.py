@@ -4,7 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.graph import KIND_NODE
+from app.graph import KIND_NODE, record_label
 from app.models import Actor, ArtifactVersion, Case, Claim, GraphEdge, IngestJob, IngestStep, SourceArtifact
 from app.graphstore.claims import build_claims
 from app.graphstore.store import edges_from_claims, episode_edges, index_counts, structure_graph
@@ -193,11 +193,12 @@ def _visible_version(db: Session, organization_id: str, actor_id: str, as_of: da
 
 def _document(version: ArtifactVersion, case_ids: list[str], on_graph: bool) -> dict:
     amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
+    _label, title, external_id = record_label(version)
     return {
-        "id": version.artifact.external_id,
+        "id": external_id,
         "version_id": version.id,
         "kind": version.artifact.kind,
-        "title": version.artifact.title,
+        "title": title,
         "amount": money(amount),
         "available_from": version.available_from.isoformat() if version.available_from else None,
         "case_id": case_ids[0] if case_ids else "",
@@ -215,11 +216,16 @@ def _node(version: ArtifactVersion, case_ids: list[str], *, redacted: bool) -> d
     else:
         group = kind or "other"
     include_text = bool(case_ids) or kind == "policy"
+    if redacted:
+        label, title, document_id = "Blocked evidence", "Blocked evidence", ""
+    else:
+        label, title, document_id = record_label(version)
     return {
         "id": f"artifact:{version.id}",
         "type": "REDACTED" if redacted else KIND_NODE.get(kind, "DOCUMENT"),
-        "label": "Blocked evidence" if redacted else version.artifact.external_id,
-        "title": "Blocked evidence" if redacted else version.artifact.title,
+        "label": label,
+        "title": title,
+        "document_id": document_id,
         "amount": None if redacted else money(amount),
         "group": group,
         "case_id": case_ids[0] if case_ids else "",

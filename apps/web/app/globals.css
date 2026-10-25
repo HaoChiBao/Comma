@@ -497,8 +497,8 @@ h1, h2, h3 {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
-  padding: 1.25rem;
-  gap: 1.15rem;
+  padding: 1.25rem 1.25rem 1.4rem;
+  gap: 1.35rem;
   overflow-y: auto;
   transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1), opacity 200ms ease;
   pointer-events: auto;
@@ -551,8 +551,18 @@ h1, h2, h3 {
 
 /* SIDEBAR INSPECTOR CARD STYLING */
 .sidebar-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
   border-bottom: 1px solid var(--line-subtle);
-  padding-bottom: 1rem;
+  padding-bottom: 1.1rem;
+}
+
+.inspector-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  line-height: 1.3;
+  color: var(--text);
 }
 
 .cell-eyebrow {
@@ -566,7 +576,9 @@ h1, h2, h3 {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin: 0.15rem 0 0.4rem;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
 }
 
 .status-badge {
@@ -594,10 +606,10 @@ h1, h2, h3 {
 .status-dot.grey { background: #94A3B8; }
 
 .header-summary {
-  font-size: 0.85rem;
-  line-height: 1.45;
+  font-size: 0.88rem;
+  line-height: 1.55;
   color: var(--text);
-  margin: 0.4rem 0 0.75rem;
+  margin: 0;
 }
 
 /* Formula Callout Box */
@@ -1059,10 +1071,18 @@ h1, h2, h3 {
 .modal.preview-sheet.expanded .preview-image { max-height: 100%; }
 .preview-note { margin: 0.45rem 0 0; color: var(--dim); font-size: 0.78rem; }
 .preview-open { display: block; margin-top: 0.7rem; }
-.node-summary { display: grid; gap: 0.45rem; }
+.node-summary { display: block; }
+.node-summary dl { display: grid; gap: 0.9rem; margin: 0; }
 .node-summary p { margin: 0; }
-.node-summary dt { color: var(--muted); font-size: 0.72rem; margin-top: 0.45rem; }
-.node-summary dd { margin: 0.1rem 0 0; }
+.node-summary dt {
+  margin: 0 0 0.22rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.node-summary dd { margin: 0; line-height: 1.55; }
 button.summary-ref {
   display: inline;
   vertical-align: baseline;
@@ -1124,7 +1144,8 @@ button.summary-ref:hover {
   to { background-position: -120% 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .summary-skeleton-line { animation: none; }
+  .summary-skeleton-line,
+  .agent-thinking-line { animation: none; }
 }
 .stack { display: grid; gap: 0.6rem; margin: 1rem 0; }
 .divider { height: 1px; background: var(--line); margin: 1rem 0; }
@@ -1309,8 +1330,8 @@ button.summary-ref:hover {
 .set-root-action-btn {
   background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
   font-size: 0.76rem;
   font-weight: 600;
   color: var(--text);
@@ -1319,7 +1340,7 @@ button.summary-ref:hover {
   align-items: center;
   gap: 0.35rem;
   transition: all 120ms ease;
-  margin-top: 0.5rem;
+  margin-top: 0;
   width: 100%;
   justify-content: center;
 }
@@ -1339,13 +1360,19 @@ button.summary-ref:hover {
 
 .inspector-agent-row {
   display: flex;
-  gap: 0.4rem;
-  margin-top: 0.35rem;
+  gap: 0.55rem;
+  margin: 0;
 }
 .inspector-agent-row button {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.7rem;
   font-size: 0.78rem;
-  padding: 0.45rem 0.55rem;
+  line-height: 1.25;
+  padding: 0.5rem 0.65rem;
+  text-align: center;
 }
 .ask-agent-btn {
   white-space: normal;
@@ -1355,26 +1382,85 @@ button.summary-ref:hover {
 .investigation-panel {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 0.85rem;
 }
-.agent-terminal {
-  background: #0D0D0C;
-  color: #F6F1EA;
-  border-radius: 10px;
-  padding: 0.7rem 0.75rem;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  line-height: 1.45;
+.agent-held {
+  flex: 1;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--muted);
 }
-.agent-terminal p {
-  margin: 0 0 0.45rem;
+.agent-thinking {
+  display: grid;
+  gap: 0.35rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line-subtle);
 }
-.agent-terminal p:last-child {
-  margin-bottom: 0;
+.agent-thinking p {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--muted);
 }
-.agent-terminal .kind {
-  color: #FA6610;
-  font-weight: 700;
+.agent-thinking-line {
+  display: block;
+  height: 0.72rem;
+  margin-top: 0.15rem;
+  border-radius: 6px;
+  background: linear-gradient(100deg, #e6e0d8 30%, #f4f1eb 46%, #ffffff 50%, #f4f1eb 54%, #e6e0d8 70%);
+  background-size: 220% 100%;
+  animation: summary-glare 1.15s ease-in-out infinite;
+}
+.agent-thinking-line.short { width: 68%; }
+.agent-review {
+  list-style: none;
+  margin: 0;
+  padding: 0.15rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  border-top: 1px solid var(--line-subtle);
+}
+.agent-review > li {
+  display: grid;
+  gap: 0.28rem;
+  margin: 0;
+  padding-top: 0.85rem;
+}
+.agent-review > li:first-child {
+  padding-top: 0.85rem;
+}
+.agent-review-kind {
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--orange);
+}
+.agent-review p {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+.agent-review ul {
+  list-style: none;
+  margin: 0.15rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+.agent-review ul li {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--text);
 }
 .suggestion-card,
 .precedent-panel {
@@ -1434,6 +1520,22 @@ button.summary-ref:hover {
   filter: drop-shadow(0 0 4px rgba(250, 102, 16, 0.85));
   stroke-dasharray: 8 6;
   animation: agent-edge-flow 1.1s linear infinite;
+}
+.agent-ghost-hit {
+  cursor: pointer;
+}
+.agent-ghost .radial-node-label,
+.agent-ghost-label {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.agent-ghost-kicker {
+  font-family: "Saans", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  fill: #FA6610;
+  pointer-events: none;
 }
 .agent-inferred-label,
 .agent-ghost-label {

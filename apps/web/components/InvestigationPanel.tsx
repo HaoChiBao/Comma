@@ -5,6 +5,7 @@ import type { AgentSuggestion, InvestigationStep, Precedent } from "@/lib/invest
 export function InvestigationPanel({
   steps,
   shown,
+  thinking,
   precedentsOpen,
   precedents,
   suggestion,
@@ -14,6 +15,7 @@ export function InvestigationPanel({
 }: {
   steps: InvestigationStep[];
   shown: number;
+  thinking?: boolean;
   precedentsOpen: boolean;
   precedents: Precedent[];
   suggestion: AgentSuggestion | null;
@@ -46,14 +48,31 @@ export function InvestigationPanel({
         </div>
       ) : null}
 
-      {visibleSteps.length > 0 ? (
-        <div className="agent-terminal" role="log" aria-live="polite" aria-label="Investigation">
-          {visibleSteps.map((step, index) => (
-            <p key={`${step.kind}-${index}`}>
-              <span className="kind">[{step.kind}]</span> {step.text}
-            </p>
-          ))}
+      {thinking ? (
+        <div className="agent-thinking" role="status" aria-live="polite" aria-label="Thinking">
+          <span className="agent-review-kind">Thinking</span>
+          <p>Reading the records already visible.</p>
+          <span className="agent-thinking-line" />
+          <span className="agent-thinking-line short" />
         </div>
+      ) : null}
+
+      {visibleSteps.length > 0 ? (
+        <ol className="agent-review" role="log" aria-live="polite" aria-label="Investigation">
+          {visibleSteps.map((step, index) => (
+            <li key={`${step.kind}-${index}`}>
+              <span className="agent-review-kind">{step.kind}</span>
+              <p>{step.text}</p>
+              {step.lines && step.lines.length > 0 ? (
+                <ul>
+                  {step.lines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+          ))}
+        </ol>
       ) : null}
 
       {precedentsOpen ? (

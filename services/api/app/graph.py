@@ -17,6 +17,19 @@ KIND_NODE = {
 }
 
 
+def record_label(version) -> tuple[str, str, str]:
+    """Shown name, title, and document id.
+
+    A stored display name is the label. When it is missing, the label is the id.
+    Seeded records without a display name keep their ids.
+    """
+    external_id = version.artifact.external_id
+    name = str((version.metadata_json or {}).get("display_name") or "").strip()
+    if name:
+        return name, name, external_id
+    return external_id, version.artifact.title or external_id, external_id
+
+
 def _case_ids(version) -> list[str]:
     return list((version.metadata_json or {}).get("case_ids") or [])
 
@@ -41,12 +54,14 @@ def project_graph(db: Session, snapshot_id: str, view: str) -> dict:
         amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
         formula = (version.metadata_json or {}).get("formula") or ""
         origin = "calculated" if formula else "unexplained" if version.artifact.kind == "journal" else "sourced"
+        label, title, document_id = record_label(version)
         nodes.append(
             {
                 "id": f"artifact:{version.id}",
                 "type": KIND_NODE.get(version.artifact.kind, "DOCUMENT"),
-                "label": version.artifact.external_id,
-                "title": version.artifact.title,
+                "label": label,
+                "title": title,
+                "document_id": document_id,
                 "amount": money(amount),
                 "origin": origin,
                 "formula": formula,
@@ -162,16 +177,17 @@ def _edge(edge: GraphEdge) -> dict:
 
 def document_payload(version) -> dict:
     amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
+    label, title, _document_id = record_label(version)
     return {
         "source_version_id": version.id,
-        "title": version.artifact.title,
+        "title": title,
         "kind": version.artifact.kind,
         "text_excerpt": version.content_text[:500],
         "document_date": version.document_date.isoformat(),
         "available_from": version.available_from.isoformat() if version.available_from else None,
         "source_locator": next((fact.source_locator for fact in version.facts), ""),
         "confidence": "seeded",
-        "citation_label": version.artifact.external_id,
+        "citation_label": label,
         "amount": money(amount),
         "origin": "unexplained" if version.artifact.kind == "journal" else "sourced",
     }

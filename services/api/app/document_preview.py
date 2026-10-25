@@ -120,6 +120,14 @@ def _read_pack(filename: str) -> bytes | None:
         return archive.read(path)
 
 
+def _agent_hidden(name: str) -> bool:
+    """The answer key is not a document the agent can open by filename."""
+    lowered = name.replace("\\", "/").lower()
+    if "/oracle/" in f"/{lowered}" or lowered.startswith("oracle/"):
+        return True
+    return lowered.rsplit("/", 1)[-1].startswith("ground_truth")
+
+
 def _pack_index() -> dict[str, str]:
     global _PACK_INDEX
     if _PACK_INDEX is not None:
@@ -129,7 +137,7 @@ def _pack_index() -> dict[str, str]:
     if PACK.exists():
         with zipfile.ZipFile(PACK) as archive:
             for name in archive.namelist():
-                if name.endswith("/"):
+                if name.endswith("/") or _agent_hidden(name):
                     continue
                 base = name.replace("\\", "/").rsplit("/", 1)[-1].lower()
                 if base in found:

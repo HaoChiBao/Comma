@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DocumentPreview } from "@/components/DocumentPreview";
 import { EvidenceGraph } from "@/components/EvidenceGraph";
 import { InvestigationPanel } from "@/components/InvestigationPanel";
@@ -52,6 +52,8 @@ export default function HomePage() {
   const [precedentsOpen, setPrecedentsOpen] = useState(false);
   const [openSuggestionId, setOpenSuggestionId] = useState<string | null>(null);
   const [streamNodeId, setStreamNodeId] = useState<string | null>(null);
+  const [narrating, setNarrating] = useState(false);
+  const reviewToken = useRef(0);
 
   // 1. Fetch available actors
   useEffect(() => {
@@ -179,12 +181,14 @@ export default function HomePage() {
   }, [precedents]);
 
   useEffect(() => {
+    reviewToken.current += 1;
     setSuggestions([]);
     setInferredLinks([]);
     setDismissedIds([]);
     setSteps([]);
     setShownSteps(0);
     setInvestigating(false);
+    setNarrating(false);
     setOpenSuggestionId(null);
     setStreamNodeId(null);
   }, [actorId, asOf, mode]);
@@ -205,8 +209,12 @@ export default function HomePage() {
     setDrawnIds((prev) => (prev.length === ids.length && prev.every((id, index) => id === ids[index]) ? prev : ids));
   }, []);
 
-  function askAgent() {
-    if (!currentNode || !graph || investigating) return;
+  async function askAgent() {
+    if (!currentNode || !graph || investigating || narrating) return;
+    if (suggestions.some((item) => item.id === currentNode.id) || inferredLinks.some((link) => link.target === currentNode.id)) return;
+    const token = reviewToken.current + 1;
+    reviewToken.current = token;
+    const nodeId = currentNode.id;
     const result = buildInvestigation({
       node: currentNode,
       nodes: graph.nodes,
@@ -216,13 +224,51 @@ export default function HomePage() {
       precedents,
       blockedIds: [...dismissedIds, ...inferredLinks.map((link) => link.target)],
     });
-    setStreamNodeId(currentNode.id);
-    setSteps(result.steps);
-    setShownSteps(result.steps.length > 0 ? 1 : 0);
-    setInvestigating(result.steps.length > 1);
+    const thinking = result.steps[0]?.text || "The visible records were read.";
+    const action = result.steps[1]?.text || "The visible records were compared.";
+    const lines = result.steps[1]?.lines || [];
+    const verdict = result.steps[2]?.text || "The comparison is limited to records already visible.";
+    setStreamNodeId(nodeId);
+    setSteps([]);
+    setShownSteps(0);
+    setInvestigating(false);
+    setNarrating(true);
     setSuggestions(result.suggestions);
     setOpenSuggestionId(null);
     setInspectorOpen(true);
+    const started = Date.now();
+    let nextSteps = result.steps;
+    try {
+      const view = currentActor?.role === "auditor" ? "auditor" : "agent";
+      const params = new URLSearchParams({
+        organization_id: organizationId,
+        actor_id: actorId,
+        as_of: asOf,
+        mode,
+        view,
+        node_id: nodeId,
+      });
+      const narrated = await api<{ narrated: boolean; steps: InvestigationStep[] }>(`/api/v1/company-graph/investigate?${params}`, {
+        method: "POST",
+        body: JSON.stringify({ thinking, action, lines, verdict }),
+      });
+      if (narrated.steps?.length === 3 && narrated.steps.every((step) => step.text)) {
+        nextSteps = narrated.steps.map((step, index) => ({
+          kind: step.kind,
+          text: step.text,
+          lines: index === 1 ? lines : step.lines,
+        }));
+      }
+    } catch {
+      nextSteps = result.steps;
+    }
+    const wait = Math.max(0, 800 - (Date.now() - started));
+    await new Promise((resolve) => window.setTimeout(resolve, wait));
+    if (reviewToken.current !== token) return;
+    setSteps(nextSteps);
+    setShownSteps(nextSteps.length > 0 ? 1 : 0);
+    setNarrating(false);
+    setInvestigating(nextSteps.length > 1);
   }
 
   function approveSuggestion(id: string) {
@@ -257,6 +303,11 @@ export default function HomePage() {
   const openSuggestion = suggestions.find((item) => item.id === openSuggestionId) || null;
   const streamSteps = streamNodeId && currentNode?.id === streamNodeId ? steps : [];
   const streamShown = streamNodeId && currentNode?.id === streamNodeId ? shownSteps : 0;
+  const heldByAgent = Boolean(
+    currentNode &&
+      (suggestions.some((item) => item.id === currentNode.id) || inferredLinks.some((link) => link.target === currentNode.id))
+  );
+  const reviewThinking = narrating && streamNodeId === currentNode?.id;
 
   return (
     <main className="fullscreen-workspace">
@@ -434,11 +485,27 @@ export default function HomePage() {
                 )}
               </div>
 
-              <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "var(--text)", margin: "0.15rem 0" }}>
-                {currentNode.label}
-              </div>
+              <div className="inspector-title">{currentNode.label}</div>
+              {currentNode.document_id && currentNode.document_id !== currentNode.label ? (
+                <div className="cell-eyebrow">{currentNode.document_id}</div>
+              ) : null}
 
-              <div className="header-summary" style={{ margin: "0.2rem 0 0.5rem" }}>
+              {openSuggestion && openSuggestion.id === currentNode.id ? (
+                <div className="suggestion-card">
+                  <div className="suggestion-kicker">Suggested by Comma Agent</div>
+                  <p>{`${openSuggestion.reason.charAt(0).toUpperCase()}${openSuggestion.reason.slice(1)}.`}</p>
+                  <div className="suggestion-actions">
+                    <button type="button" className="primary" onClick={() => approveSuggestion(openSuggestion.id)}>
+                      Approve
+                    </button>
+                    <button type="button" onClick={() => dismissSuggestion(openSuggestion.id)}>
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="header-summary">
                 <NodeSummary
                   summary={nodeSummary.summary}
                   error={nodeSummary.error}
@@ -448,9 +515,13 @@ export default function HomePage() {
               </div>
 
               <div className="inspector-agent-row">
-                <button type="button" className="primary ask-agent-btn" onClick={askAgent} disabled={investigating && streamNodeId === currentNode.id}>
-                  Ask agent to investigate
-                </button>
+                {heldByAgent ? (
+                  <p className="agent-held">Added by an investigation. It is not investigated again.</p>
+                ) : (
+                  <button type="button" className="primary ask-agent-btn" onClick={askAgent} disabled={reviewThinking || (investigating && streamNodeId === currentNode.id)}>
+                    {reviewThinking ? "Thinking" : "Ask agent to investigate"}
+                  </button>
+                )}
                 <button type="button" className={precedentsOpen ? "primary" : ""} aria-pressed={precedentsOpen} onClick={() => setPrecedentsOpen((openPanel) => !openPanel)}>
                   Learned precedents
                 </button>
@@ -458,9 +529,10 @@ export default function HomePage() {
               <InvestigationPanel
                 steps={streamSteps}
                 shown={streamShown}
+                thinking={reviewThinking}
                 precedentsOpen={precedentsOpen}
                 precedents={precedents}
-                suggestion={openSuggestion}
+                suggestion={openSuggestion && openSuggestion.id !== currentNode.id ? openSuggestion : null}
                 onApprove={approveSuggestion}
                 onDismiss={dismissSuggestion}
                 onTogglePrecedent={togglePrecedent}
@@ -489,6 +561,12 @@ export default function HomePage() {
               </div>
               <table className="meta-table">
                 <tbody>
+                  {currentNode.document_id ? (
+                    <tr>
+                      <td className="key">Id</td>
+                      <td className="val">{currentNode.document_id}</td>
+                    </tr>
+                  ) : null}
                   <tr>
                     <td className="key">Type</td>
                     <td className="val" style={{ textTransform: "capitalize" }}>
@@ -623,14 +701,14 @@ export default function HomePage() {
                   className="doc-result-btn"
                   onClick={() => {
                     const match =
-                      activeNodes.find((n) => n.version_id === doc.version_id || n.label === doc.id) ||
-                      graph?.nodes.find((n) => n.version_id === doc.version_id || n.label === doc.id);
+                      activeNodes.find((n) => n.version_id === doc.version_id || n.document_id === doc.id || n.label === doc.id) ||
+                      graph?.nodes.find((n) => n.version_id === doc.version_id || n.document_id === doc.id || n.label === doc.id);
                     if (match) handleSelectNode(match.id);
                     setPreviewId(doc.version_id);
                   }}
                 >
-                  <strong>{doc.id}</strong>
-                  <span>{doc.amount ? `$${doc.amount}` : doc.kind}</span>
+                  <strong>{doc.title || doc.id}</strong>
+                  <span>{[doc.title && doc.title !== doc.id ? doc.id : "", doc.amount ? `$${doc.amount}` : doc.kind].filter(Boolean).join(" · ")}</span>
                 </button>
               ))}
             </div>

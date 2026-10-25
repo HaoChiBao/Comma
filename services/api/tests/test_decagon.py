@@ -58,11 +58,13 @@ def test_decagon_analysis_hides_the_invoice_until_december():
         "/api/v1/company-graph",
         params={"actor_id": "actor-decagon-legal", "as_of": "2025-09-30T23:59:00+00:00", "mode": "audit", "view": "agent"},
     )
-    finance_ids = {node["label"] for node in body["nodes"]}
-    legal_ids = {node["label"] for node in legal.json()["nodes"]}
+    finance_ids = {node.get("document_id") or node["label"] for node in body["nodes"]}
+    legal_ids = {node.get("document_id") or node["label"] for node in legal.json()["nodes"]}
     assert "CTR-0007" in legal_ids
     assert "CTR-0007" not in finance_ids
-    invoice = next(node for node in later["nodes"] if node["label"] == "INV-C01-381")
+    invoice = next(node for node in later["nodes"] if (node.get("document_id") or node["label"]) == "INV-C01-381")
+    assert invoice["label"] != "INV-C01-381"
+    assert invoice["title"] == invoice["label"]
     visible = api.get(
         f"/api/v1/company-graph/documents/{invoice['version_id']}",
         params={"actor_id": "actor-decagon-finance", "as_of": "2025-12-15T12:00:00+00:00", "mode": "audit"},
@@ -75,7 +77,7 @@ def test_decagon_analysis_hides_the_invoice_until_december():
     )
     assert hidden.status_code == 403
     assert "158" not in hidden.text
-    restricted = next(node for node in legal.json()["nodes"] if node["label"] == "CTR-0007")
+    restricted = next(node for node in legal.json()["nodes"] if (node.get("document_id") or node["label"]) == "CTR-0007")
     blocked = api.get(
         f"/api/v1/company-graph/documents/{restricted['version_id']}",
         params={"actor_id": "actor-decagon-finance", "as_of": "2025-09-30T23:59:00+00:00", "mode": "audit"},

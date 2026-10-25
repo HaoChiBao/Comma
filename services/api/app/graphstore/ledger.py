@@ -138,8 +138,16 @@ def _fact_id(version_id: str, fact_type: str, source_locator: str) -> str:
     return f"lf-{digest}"[:80]
 
 
+def is_oracle_path(name: str) -> bool:
+    """Answer-key files stay out of ledger reads. Matches ground_truth.json and later revisions."""
+    lowered = name.replace("\\", "/").lower()
+    if "/oracle/" in f"/{lowered}" or lowered.startswith("oracle/"):
+        return True
+    return lowered.rsplit("/", 1)[-1].startswith("ground_truth")
+
+
 def _is_oracle(name: str) -> bool:
-    return name.replace("\\", "/").lower().endswith(ORACLE_GROUND_TRUTH)
+    return is_oracle_path(name)
 
 
 def _transaction_id(value: str | None) -> str | None:

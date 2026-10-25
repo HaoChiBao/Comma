@@ -10,6 +10,7 @@ type WebNode = {
   id: string;
   type: string;
   label: string;
+  documentId?: string;
   amount: string | null;
   title?: string;
   depth: number;
@@ -34,6 +35,16 @@ type HistorySnapshot = {
   rootId?: string;
   upstreamTrail?: string[];
 };
+
+function clipLabel(text: string, max = 36) {
+  const value = (text || "").trim();
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
+}
+
+function recordCode(node: { label?: string; document_id?: string }) {
+  return node.document_id || node.label || "";
+}
 
 const TYPE_COLORS: Record<string, string> = {
   DECISION: "#FA6610", // Comma orange
@@ -84,6 +95,165 @@ function getDistinctNeighbors(
   }
 
   return Array.from(byLabel.values());
+}
+
+const FLOW_COLUMN = 230;
+const FLOW_ROW = 52;
+
+function flowBranchPath(x1: number, y1: number, x2: number, y2: number) {
+  const dx = Math.max(0, x2 - x1);
+  return `M ${x1} ${y1} C ${x1 + dx * 0.45} ${y1}, ${x2 - dx * 0.45} ${y2}, ${x2} ${y2}`;
+}
+
+function flowCurveY(x1: number, y1: number, x2: number, y2: number, atX: number) {
+  const dx = Math.max(1, x2 - x1);
+  const c1x = x1 + dx * 0.45;
+  const c2x = x2 - dx * 0.45;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 18; i += 1) {
+    const t = (lo + hi) / 2;
+    const mt = 1 - t;
+    const x = mt * mt * mt * x1 + 3 * mt * mt * t * c1x + 3 * mt * t * t * c2x + t * t * t * x2;
+    if (x < atX) lo = t;
+    else hi = t;
+  }
+  const t = (lo + hi) / 2;
+  const mt = 1 - t;
+  return mt * mt * mt * y1 + 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t * y2;
+}
+
+function inkWidth(text: string) {
+  return text.length * 6.7;
+}
+
+function nodeCaption(node: WebNode) {
+  if (node.isGroup) return node.label;
+  return `${node.label}${node.amount ? ` · $${node.amount}` : ""}`;
+}
+
+type InkBox = { x1: number; y1: number; x2: number; y2: number };
+
+function boxesOverlap(a: InkBox, b: InkBox) {
+  return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
+}
+
+function nodeInkBox(node: WebNode): InkBox {
+  const radius = node.isRoot ? 14 : 12;
+  const labelX = (node.isRoot ? 11.5 : 8) + 8;
+  return {
+    x1: node.x - radius,
+    y1: node.y - 16,
+    x2: node.x + labelX + inkWidth(nodeCaption(node)) + 8,
+    y2: node.y + 16,
+  };
+}
+
+function ghostInkBox(x: number, y: number, caption: string): InkBox {
+  return {
+    x1: x - 18,
+    y1: y - 20,
+    x2: x + 22 + inkWidth(caption) + 8,
+    y2: y + 18,
+  };
+}
+
+function suggestionCaption(item: { label: string; amount: string | null }) {
+  return `${item.label}${item.amount ? ` · $${item.amount}` : ""}`;
+}
+
+function clearFanSlots(ax: number, ay: number, ghostX: number, columnX: number, childYs: number[]) {
+  const ordered = [...childYs].sort((a, b) => a - b);
+  if (ordered.length === 0) {
+    return [-FLOW_ROW, 0, FLOW_ROW].map((offset) => ay + offset);
+  }
+  const slots: number[] = [];
+  const top = ordered[0] - FLOW_ROW;
+  const bottom = ordered[ordered.length - 1] + FLOW_ROW;
+  let runStart: number | null = null;
+  let runEnd = top;
+  for (let y = top; y <= bottom; y += 2) {
+    const yAtColumn = flowCurveY(ax, ay, ghostX, y, columnX);
+    const gap = ordered.reduce((best, childY) => Math.min(best, Math.abs(childY - yAtColumn)), Infinity);
+    if (gap > 18) {
+      if (runStart === null) runStart = y;
+      runEnd = y;
+    } else if (runStart !== null) {
+      slots.push((runStart + runEnd) / 2);
+      runStart = null;
+    }
+  }
+  if (runStart !== null) slots.push((runStart + runEnd) / 2);
+  const inFan = slots.filter((y) => y >= ordered[0] - FLOW_ROW * 0.65 && y <= ordered[ordered.length - 1] + FLOW_ROW * 0.65);
+  return inFan.length > 0 ? inFan : slots;
+}
+
+function layoutSuggestionFan<T extends { id: string; anchorId: string; label: string; amount: string | null }>(
+  items: T[],
+  treeNodes: WebNode[],
+  rootId: string | null
+): Array<T & { x: number; y: number }> {
+  const byAnchor = new Map<string, T[]>();
+  for (const item of items) {
+    const list = byAnchor.get(item.anchorId) || [];
+    list.push(item);
+    byAnchor.set(item.anchorId, list);
+  }
+
+  const occupied = treeNodes.map(nodeInkBox);
+  const placed: Array<T & { x: number; y: number }> = [];
+
+  for (const [anchorId, group] of byAnchor) {
+    const anchor = treeNodes.find((node) => node.id === anchorId) || (rootId ? treeNodes.find((node) => node.id === rootId) : undefined);
+    const ax = anchor?.x ?? 0;
+    const ay = anchor?.y ?? 0;
+    const anchorKey = anchor?.id || anchorId;
+    const children = treeNodes.filter((node) => node.parentId === anchorKey).sort((a, b) => a.y - b.y);
+    const columnX = children[0]?.x ?? ax + FLOW_COLUMN;
+    const labelEdge = children.reduce((max, child) => Math.max(max, nodeInkBox(child).x2), columnX);
+    // Sit on the same outward fan as this anchor's children, just past their labels.
+    // +470 left a distant straight column; +188 painted over the first-tier labels.
+    const ghostX = Math.max(ax + FLOW_COLUMN + 132, labelEdge + 22);
+    const slots = clearFanSlots(ax, ay, ghostX, columnX, children.map((child) => child.y));
+    let slotIndex = 0;
+
+    group.forEach((item, index) => {
+      const caption = suggestionCaption(item);
+      let chosenX = ghostX;
+      let chosenY = ay + (index - (group.length - 1) / 2) * FLOW_ROW;
+      let found = false;
+
+      for (let cursor = slotIndex; cursor < slots.length; cursor += 1) {
+        const y = slots[cursor];
+        if (placed.some((node) => Math.abs(node.y - y) < FLOW_ROW * 0.75 && Math.abs(node.x - ghostX) < 180)) continue;
+        for (const extra of [0, 24, 48]) {
+          const x = ghostX + extra;
+          const box = ghostInkBox(x, y, caption);
+          const blocked =
+            occupied.some((ink) => boxesOverlap(box, ink)) ||
+            placed.some((node) => boxesOverlap(box, ghostInkBox(node.x, node.y, suggestionCaption(node))));
+          if (!blocked) {
+            chosenX = x;
+            chosenY = y;
+            slotIndex = cursor + 1;
+            found = true;
+            occupied.push(box);
+            break;
+          }
+        }
+        if (found) break;
+      }
+
+      if (!found) {
+        const top = children[0]?.y ?? ay;
+        chosenY = top - FLOW_ROW * (group.length - index);
+        occupied.push(ghostInkBox(chosenX, chosenY, caption));
+      }
+      placed.push({ ...item, x: chosenX, y: chosenY });
+    });
+  }
+
+  return placed;
 }
 
 export function RadialWebGraph({
@@ -172,7 +342,7 @@ export function RadialWebGraph({
       map.set(rootId, nodeMap.get(rootId)!);
     }
     for (const n of nodes) {
-      if (n.type === "DECISION" || n.label.startsWith("JE") || n.id.includes("cell:D3") || n.label === "D3") {
+      if (n.type === "DECISION" || recordCode(n).startsWith("JE") || n.id.includes("cell:D3") || recordCode(n) === "D3") {
         map.set(n.id, n);
       }
     }
@@ -320,7 +490,7 @@ export function RadialWebGraph({
       return;
     }
 
-    const decision = nodes.find((n) => n.type === "DECISION" || n.label.startsWith("JE"));
+    const decision = nodes.find((n) => n.type === "DECISION" || recordCode(n).startsWith("JE"));
     if (decision) {
       setRootId(decision.id);
       return;
@@ -370,6 +540,7 @@ export function RadialWebGraph({
       return {
         id: uid,
         label: n?.label || uid,
+        documentId: n?.document_id && n.document_id !== (n.label || uid) ? n.document_id : "",
         type: n?.type || "DOCUMENT",
         amount: n?.amount || null,
         x,
@@ -478,6 +649,7 @@ export function RadialWebGraph({
       return;
     }
     if (!selected || !rootId || visibleIds.size === 0 || !nodeMap.has(selected)) return;
+    if (suggestions.some((item) => item.id === selected)) return;
     if (visibleIds.has(selected)) return;
     if (upstreamTrail.includes(selected)) return;
 
@@ -533,6 +705,7 @@ export function RadialWebGraph({
     nodeMap,
     onRootChange,
     upstreamTrail,
+    suggestions,
   ]);
 
   // Stable Directional Tree Layout (Anchored Root, Zero Vertical Shift on Expand)
@@ -610,6 +783,7 @@ export function RadialWebGraph({
         id,
         type: isGroup ? groupData?.type || "GROUP" : nodeData?.type || "DOCUMENT",
         label: isGroup ? groupData?.label || "Group" : nodeData?.label || id,
+        documentId: isGroup ? "" : nodeData?.document_id || "",
         amount: isGroup ? null : nodeData?.amount || null,
         title: isGroup ? `Group of ${groupData?.count} ${groupData?.type}` : nodeData?.title || nodeData?.label,
         depth: d,
@@ -909,6 +1083,18 @@ export function RadialWebGraph({
       minY = Math.min(minY, node.y - 28);
       maxY = Math.max(maxY, node.y + 22);
     }
+    const framedGhosts = layoutSuggestionFan(
+      suggestions.filter((item) => !visibleIds.has(item.id)),
+      treeNodes,
+      rootId
+    );
+    for (const ghost of framedGhosts) {
+      const caption = suggestionCaption(ghost);
+      minX = Math.min(minX, ghost.x - 24);
+      maxX = Math.max(maxX, ghost.x + 28 + inkWidth(caption));
+      minY = Math.min(minY, ghost.y - 24);
+      maxY = Math.max(maxY, ghost.y + 22);
+    }
     const pad = 28;
     const top = 132;
     const right = 400;
@@ -928,7 +1114,7 @@ export function RadialWebGraph({
       x: visibleCenterX - dimensions.w / 2 - midX * k,
       y: visibleCenterY - dimensions.h / 2 - midY * k,
     });
-  }, [treeNodes, upstreamNodes, dimensions.w, dimensions.h, selected]);
+  }, [treeNodes, upstreamNodes, dimensions.w, dimensions.h, selected, suggestions, visibleIds, rootId]);
 
   const inferredPairs = useMemo(() => {
     const pairs = new Set<string>();
@@ -940,13 +1126,11 @@ export function RadialWebGraph({
   }, [inferredLinks]);
 
   const ghostLayout = useMemo(() => {
-    const placed = new Map(treeNodes.map((node) => [node.id, { x: node.x, y: node.y }]));
-    return suggestions
-      .filter((item) => !visibleIds.has(item.id))
-      .map((item, index) => {
-        const anchor = placed.get(item.anchorId) || placed.get(rootId) || { x: 0, y: 0 };
-        return { ...item, x: anchor.x + 188, y: anchor.y - 78 - index * 52 };
-      });
+    return layoutSuggestionFan(
+      suggestions.filter((item) => !visibleIds.has(item.id)),
+      treeNodes,
+      rootId
+    );
   }, [suggestions, visibleIds, treeNodes, rootId]);
 
   // Stable, Calm Camera Framing: keeps root anchored on the left without jarring whip-pans.
@@ -1054,7 +1238,9 @@ export function RadialWebGraph({
           >
             {rootCandidates.map((cand) => (
               <option key={cand.id} value={cand.id}>
-                {cand.label} {cand.amount ? `($${cand.amount})` : ""} · {cand.type}
+                {clipLabel(cand.label, 42)}
+                {cand.document_id && cand.document_id !== cand.label ? ` · ${cand.document_id}` : ""}
+                {cand.amount ? ` ($${cand.amount})` : ""} · {cand.type}
               </option>
             ))}
           </select>
@@ -1208,8 +1394,22 @@ export function RadialWebGraph({
                   fontSize={11.5}
                   fontFamily="'Saans', -apple-system, BlinkMacSystemFont, sans-serif"
                 >
-                  {un.label} {un.amount ? `· $${un.amount}` : ""}
+                  <title>{un.label}</title>
+                  {clipLabel(un.label, un.amount ? 28 : 36)} {un.amount ? `· $${un.amount}` : ""}
                 </text>
+                {un.documentId ? (
+                  <text
+                    x={16}
+                    y={16}
+                    textAnchor="start"
+                    fill="#6B655F"
+                    fontWeight={500}
+                    fontSize={9}
+                    fontFamily="'Saans', -apple-system, BlinkMacSystemFont, sans-serif"
+                  >
+                    {un.documentId}
+                  </text>
+                ) : null}
               </g>
             );
           })}
@@ -1269,11 +1469,7 @@ export function RadialWebGraph({
                 ? 0.95
                 : 0.65;
 
-              // Smooth horizontal cubic bezier curve
-              const dx = Math.max(0, c.x - p.x);
-              const cpx1 = p.x + dx * 0.45;
-              const cpx2 = c.x - dx * 0.45;
-              const pathD = `M ${p.x} ${p.y} C ${cpx1} ${p.y}, ${cpx2} ${c.y}, ${c.x} ${c.y}`;
+              const pathD = flowBranchPath(p.x, p.y, c.x, c.y);
 
               const midX = (p.x + c.x) / 2;
               const midY = (p.y + c.y) / 2;
@@ -1323,6 +1519,26 @@ export function RadialWebGraph({
                 strokeWidth={1.5}
                 strokeDasharray="4 4"
                 opacity={0.85}
+              />
+            );
+          })}
+
+          {ghostLayout.map((ghost) => {
+            const anchor = posMap.get(ghost.anchorId) || treeNodes.find((node) => node.id === ghost.anchorId);
+            const ax = anchor && "x" in anchor ? anchor.x : ghost.x - FLOW_COLUMN;
+            const ay = anchor && "y" in anchor ? anchor.y : ghost.y;
+            const ring = ghost.edgeType === "CONTRADICTS" ? "#FA6610" : ghost.edgeType === "AMBIGUOUS" ? "#8B5CF6" : "#64748B";
+            return (
+              <path
+                key={`ghost-edge-${ghost.id}`}
+                className="agent-ghost-edge"
+                d={flowBranchPath(ax, ay, ghost.x, ghost.y)}
+                fill="none"
+                stroke={ring}
+                strokeWidth={1.5}
+                strokeDasharray="4 4"
+                opacity={0.88}
+                pointerEvents="none"
               />
             );
           })}
@@ -1411,69 +1627,56 @@ export function RadialWebGraph({
                   fontSize={n.isRoot ? 12 : 11.5}
                   fontFamily="'Saans', -apple-system, BlinkMacSystemFont, sans-serif"
                 >
+                  <title>{n.label}</title>
                   {n.isGroup
                     ? n.label
-                    : `${n.label}${n.amount ? ` · $${n.amount}` : ""}`}
+                    : `${clipLabel(n.label, n.amount ? 28 : 36)}${n.amount ? ` · $${n.amount}` : ""}`}
                 </text>
+                {!n.isGroup && n.documentId && n.documentId !== n.label ? (
+                  <text
+                    x={labelX}
+                    y={labelY + 13}
+                    textAnchor="start"
+                    fill="#6B655F"
+                    fontWeight={500}
+                    fontSize={9}
+                    fontFamily="'Saans', -apple-system, BlinkMacSystemFont, sans-serif"
+                  >
+                    {n.documentId}
+                  </text>
+                ) : null}
               </g>
             );
           })}
 
           {ghostLayout.map((ghost) => {
-            const anchor = posMap.get(ghost.anchorId) || treeNodes.find((node) => node.id === ghost.anchorId);
-            const ax = anchor && "x" in anchor ? anchor.x : ghost.x - 188;
-            const ay = anchor && "y" in anchor ? anchor.y : ghost.y + 78;
-            const open = openSuggestionId === ghost.id;
+            const picked = selected === ghost.id || openSuggestionId === ghost.id;
             const ring = ghost.edgeType === "CONTRADICTS" ? "#FA6610" : ghost.edgeType === "AMBIGUOUS" ? "#8B5CF6" : "#64748B";
+            const named = nodeMap.get(ghost.id);
+            const ghostCode = named?.document_id && named.document_id !== ghost.label ? named.document_id : "";
+            const caption = `${clipLabel(ghost.label, 42)}${ghostCode ? ` · ${ghostCode}` : ""}${ghost.amount ? ` · $${ghost.amount}` : ""}`;
+            const hitWidth = Math.max(168, caption.length * 6.6 + 78);
             return (
               <g key={`ghost-${ghost.id}`} className="agent-ghost" transform={`translate(${ghost.x} ${ghost.y})`}>
-                <path
-                  d={`M ${ax - ghost.x} ${ay - ghost.y} L -16 0`}
-                  fill="none"
-                  stroke={ring}
-                  strokeWidth={1.2}
-                  strokeDasharray="3 4"
-                  opacity={0.7}
-                />
                 <g
+                  className="agent-ghost-hit"
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
+                    onSelect(ghost.id);
                     onOpenSuggestion?.(ghost.id);
                   }}
                 >
-                  <circle r={16} fill="none" stroke={ring} strokeWidth={1.4} strokeDasharray="4 3" className="suggestion-ring" />
+                  <rect x={-20} y={-18} width={hitWidth} height={32} rx={16} fill="transparent" />
+                  <circle r={16} fill={picked ? "rgba(250, 102, 16, 0.08)" : "none"} stroke={ring} strokeWidth={picked ? 2 : 1.4} strokeDasharray="4 3" className="suggestion-ring" />
                   <circle r={5} fill="#FFFFFF" stroke={ring} strokeWidth={1.4} />
-                  <text x={20} y={4} textAnchor="start" className="radial-node-label agent-ghost-label">
-                    {`Suggested by Comma Agent: ${ghost.label}${ghost.amount ? ` · $${ghost.amount}` : ""}`}
+                  <text x={20} y={-2} textAnchor="start" className="agent-ghost-kicker">
+                    Suggested
+                  </text>
+                  <text x={20} y={12} textAnchor="start" className="radial-node-label agent-ghost-label">
+                    {caption}
                   </text>
                 </g>
-                {open ? (
-                  <g className="ghost-actions" onPointerDown={(event) => event.stopPropagation()}>
-                    <g
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onApproveSuggestion?.(ghost.id);
-                      }}
-                    >
-                      <rect x={20} y={14} width={72} height={20} rx={5} fill="#0D0D0C" />
-                      <text x={56} y={28} textAnchor="middle" fill="#FFFFFF" fontSize={11} fontWeight={650}>
-                        Approve
-                      </text>
-                    </g>
-                    <g
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDismissSuggestion?.(ghost.id);
-                      }}
-                    >
-                      <rect x={98} y={14} width={72} height={20} rx={5} fill="#FFFFFF" stroke="#E7DDD2" />
-                      <text x={134} y={28} textAnchor="middle" fill="#0D0D0C" fontSize={11} fontWeight={650}>
-                        Dismiss
-                      </text>
-                    </g>
-                  </g>
-                ) : null}
               </g>
             );
           })}

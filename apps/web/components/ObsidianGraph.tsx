@@ -17,6 +17,7 @@ type Node3D = {
   r: number;
   degree: number;
   label: string;
+  documentId: string;
   group: string;
   color: string;
   type: string;
@@ -28,6 +29,12 @@ type Node3D = {
   projZ: number;
   projScale: number;
 };
+
+function clipLabel(text: string, max = 48) {
+  const value = (text || "").trim();
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
+}
 
 type EdgeIndex = {
   sourceIndex: number;
@@ -160,7 +167,7 @@ export function ObsidianGraph({
       // Nucleus hubs (Decisions, Key POs, Vendors): ~7-10px radius
       // Inner valence docs: ~5-6.5px radius
       // Outer peripheral nodes: ~3.8-4.5px radius
-      const isNucleus = deg >= 5 || node.type === "DECISION" || node.label.startsWith("JE") || node.group === "Vendors";
+      const isNucleus = deg >= 5 || node.type === "DECISION" || (node.document_id || node.label).startsWith("JE") || node.group === "Vendors";
       const isInner = !isNucleus && (deg >= 2 || node.type === "PURCHASE_ORDER" || node.type === "CONTRACT");
       const baseRadius = isNucleus ? 7.5 + Math.min(3.0, deg * 0.35) : isInner ? 5.2 + Math.min(1.8, deg * 0.25) : 3.8;
 
@@ -194,6 +201,7 @@ export function ObsidianGraph({
         r: baseRadius,
         degree: deg,
         label: node.label,
+        documentId: node.document_id || "",
         group: g,
         color: getNodeColor(node),
         type: node.type,
@@ -417,7 +425,10 @@ export function ObsidianGraph({
           if (agentHit) {
             if (agentHit.kind === "approve") onApproveSuggestion?.(agentHit.id);
             else if (agentHit.kind === "dismiss") onDismissSuggestion?.(agentHit.id);
-            else onOpenSuggestion?.(agentHit.id);
+            else {
+              onSelect(agentHit.id);
+              onOpenSuggestion?.(agentHit.id);
+            }
             event.currentTarget.setPointerCapture(event.pointerId);
             return;
           }
@@ -610,7 +621,7 @@ function step3DPhysics(
     if (a.id === draggedId) continue;
 
     const distFromOrigin = Math.hypot(a.x, a.y, a.z) || 0.1;
-    const isNucleus = a.degree >= 5 || a.type === "DECISION" || a.label.startsWith("JE") || a.group === "Vendors";
+    const isNucleus = a.degree >= 5 || a.type === "DECISION" || (a.documentId || a.label).startsWith("JE") || a.group === "Vendors";
     const isInner = !isNucleus && (a.degree >= 2 || a.type === "PURCHASE_ORDER" || a.type === "CONTRACT");
 
     // Cohesive shell distances
@@ -773,22 +784,26 @@ function paint3DAtomGraph(
   const targetNode = nodes.find((n) => n.id === hoverId) || (selectedId ? nodes.find((n) => n.id === selectedId) : null);
 
   if (targetNode) {
-    const labelText = targetNode.amount
-      ? `${targetNode.label} · $${targetNode.amount}`
-      : targetNode.label;
+    const codeText = targetNode.documentId && targetNode.documentId !== targetNode.label ? targetNode.documentId : "";
+    const nameText = clipLabel(targetNode.label, 48);
+    const labelText = targetNode.amount ? `${nameText} · $${targetNode.amount}` : nameText;
 
     ctx.font = "600 12px 'Saans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
 
     const textWidth = ctx.measureText(labelText).width;
+    ctx.font = "500 9px 'Saans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const codeWidth = codeText ? ctx.measureText(codeText).width : 0;
+    ctx.font = "600 12px 'Saans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const pillWidth = Math.max(textWidth, codeWidth);
     const lx = targetNode.projX;
     const ly = targetNode.projY - targetNode.r * targetNode.projScale - 8;
 
     // Frosted Pill Container
     ctx.fillStyle = targetNode.id === selectedId ? "#0D0D0C" : "#FFFFFF";
     ctx.beginPath();
-    ctx.roundRect(lx - textWidth / 2 - 8, ly - 18, textWidth + 16, 22, 6);
+    ctx.roundRect(lx - pillWidth / 2 - 8, ly - (codeText ? 32 : 18), pillWidth + 16, codeText ? 36 : 22, 6);
     ctx.fill();
 
     ctx.strokeStyle = targetNode.id === selectedId ? "#0D0D0C" : "rgba(231, 221, 210, 0.9)";
@@ -797,7 +812,12 @@ function paint3DAtomGraph(
 
     // Text Ink
     ctx.fillStyle = targetNode.id === selectedId ? "#FFFFFF" : "#0D0D0C";
-    ctx.fillText(labelText, lx, ly - 4);
+    ctx.fillText(labelText, lx, codeText ? ly - 16 : ly - 4);
+    if (codeText) {
+      ctx.font = "500 9px 'Saans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = targetNode.id === selectedId ? "rgba(255,255,255,0.72)" : "#6B655F";
+      ctx.fillText(codeText, lx, ly - 4);
+    }
   }
 }
 
@@ -841,40 +861,72 @@ function drawAgentOverlay(
     ctx.restore();
   }
 
-  suggestions.forEach((suggestion, index) => {
-    const anchor = byId.get(suggestion.anchorId) || (selectedId ? byId.get(selectedId) : undefined);
+  const grouped = new Map<string, AgentSuggestion[]>();
+  for (const suggestion of suggestions) {
+    const list = grouped.get(suggestion.anchorId) || [];
+    list.push(suggestion);
+    grouped.set(suggestion.anchorId, list);
+  }
+
+  grouped.forEach((group, anchorId) => {
+    const anchor = byId.get(anchorId) || (selectedId ? byId.get(selectedId) : undefined);
     if (!anchor) return;
-    const ring = suggestion.edgeType === "CONTRADICTS" ? "#FA6610" : suggestion.edgeType === "AMBIGUOUS" ? "#8B5CF6" : "#64748B";
-    const x = anchor.projX + 34;
-    const y = anchor.projY + 28 + index * 48;
-    ctx.save();
-    ctx.strokeStyle = ring;
-    ctx.lineWidth = 1.4;
-    ctx.setLineDash([4, 3]);
-    ctx.lineDashOffset = reduce ? 0 : -glow;
-    ctx.beginPath();
-    ctx.arc(x, y, 13, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = "#FFFFFF";
-    ctx.beginPath();
-    ctx.arc(x, y, 4.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    const caption = `Suggested by Comma Agent: ${suggestion.label}${suggestion.amount ? ` · $${suggestion.amount}` : ""}`;
-    ctx.font = "600 11px 'Saans', -apple-system, BlinkMacSystemFont, sans-serif";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = "#0D0D0C";
-    ctx.fillText(caption, x + 18, y);
-    hits.push({ kind: "ghost", id: suggestion.id, x: x - 14, y: y - 14, w: ctx.measureText(caption).width + 36, h: 28 });
-    if (openId === suggestion.id) {
-      drawChip(ctx, x + 18, y + 12, 72, "Approve", true);
-      drawChip(ctx, x + 96, y + 12, 72, "Dismiss", false);
-      hits.push({ kind: "approve", id: suggestion.id, x: x + 18, y: y + 12, w: 72, h: 20 });
-      hits.push({ kind: "dismiss", id: suggestion.id, x: x + 96, y: y + 12, w: 72, h: 20 });
-    }
-    ctx.restore();
+    const step = 50;
+    const count = group.length;
+    const ys = group.map((_, index) => anchor.projY + (index - (count - 1) / 2) * step);
+    let reach = 78;
+    const crowded = (distance: number) =>
+      ys.some((y) =>
+        bodies.some((body) => {
+          const dx = anchor.projX + distance - body.projX;
+          const dy = y - body.projY;
+          const limit = Math.max(34, body.r * body.projScale + 26);
+          return dx * dx + dy * dy < limit * limit;
+        })
+      );
+    while (reach < 140 && crowded(reach)) reach += 16;
+
+    group.forEach((suggestion, index) => {
+      const ring = suggestion.edgeType === "CONTRADICTS" ? "#FA6610" : suggestion.edgeType === "AMBIGUOUS" ? "#8B5CF6" : "#64748B";
+      const x = anchor.projX + reach;
+      const y = ys[index];
+      const endX = x - 14;
+      const dx = Math.max(0, endX - anchor.projX);
+      ctx.save();
+      ctx.strokeStyle = ring;
+      ctx.lineWidth = 1.45;
+      ctx.setLineDash([4, 4]);
+      ctx.lineDashOffset = reduce ? 0 : -glow;
+      ctx.beginPath();
+      ctx.moveTo(anchor.projX, anchor.projY);
+      ctx.bezierCurveTo(anchor.projX + dx * 0.45, anchor.projY, endX - dx * 0.45, y, endX, y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, 13, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#FFFFFF";
+      ctx.beginPath();
+      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      const named = bodies.find((body) => body.id === suggestion.id);
+      const code = named?.documentId && named.documentId !== suggestion.label ? named.documentId : "";
+      const caption = `Suggested · ${clipLabel(suggestion.label, 42)}${code ? ` · ${code}` : ""}${suggestion.amount ? ` · $${suggestion.amount}` : ""}`;
+      ctx.font = "600 11px 'Saans', -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#0D0D0C";
+      ctx.fillText(caption, x + 18, y);
+      if (openId === suggestion.id) {
+        drawChip(ctx, x + 18, y + 16, 72, "Approve", true);
+        drawChip(ctx, x + 96, y + 16, 72, "Dismiss", false);
+        hits.push({ kind: "approve", id: suggestion.id, x: x + 18, y: y + 16, w: 72, h: 20 });
+        hits.push({ kind: "dismiss", id: suggestion.id, x: x + 96, y: y + 16, w: 72, h: 20 });
+      }
+      hits.push({ kind: "ghost", id: suggestion.id, x: x - 14, y: y - 16, w: ctx.measureText(caption).width + 36, h: 30 });
+      ctx.restore();
+    });
   });
   ctx.restore();
 }

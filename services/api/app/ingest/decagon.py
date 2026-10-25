@@ -30,7 +30,25 @@ from app.temporal import aware, money, sha256_text, utc
 
 ORG = "org-decagon"
 PACK = Path(os.environ.get("DECAGON_PACK") or Path(__file__).resolve().parents[2] / "data" / "decagon-agent-safe.zip")
-ROOT = os.environ.get("DECAGON_ROOT") or "Decagon_WorldState_Synthetic_Dataset/"
+
+
+def _pack_root(pack: Path) -> str:
+    override = os.environ.get("DECAGON_ROOT")
+    if override:
+        text = override.replace("\\", "/")
+        return text if text.endswith("/") else f"{text}/"
+    if not pack.exists():
+        return "Decagon_Finance_Environment_v2/"
+    marker = "metadata/source_manifest.csv"
+    with zipfile.ZipFile(pack) as archive:
+        for name in archive.namelist():
+            normalized = name.replace("\\", "/")
+            if normalized.endswith(marker) and "/oracle/" not in f"/{normalized.lower()}":
+                return normalized[: -len(marker)]
+    return "Decagon_Finance_Environment_v2/"
+
+
+ROOT = _pack_root(PACK)
 CHUNK = 40
 ACTORS = (
     ("actor-decagon-finance", "Avery Lin", "accountant"),
@@ -198,6 +216,7 @@ def absorb(db: Session, job: IngestJob, step: IngestStep) -> dict:
                 scopes=row["actor_scope"],
                 source_type=row["source_type"],
                 formula=chosen.get("formula") or "",
+                display_name=_human_name(path, row.get("source_id") or "", external_id),
             )
             seen.add(external_id)
             written += 1
@@ -240,6 +259,7 @@ def decisions(db: Session, job: IngestJob, step: IngestStep) -> dict:
             references=[node["id"]],
             scopes="finance,operations,controller",
             source_type=node["kind"],
+            display_name=_human_name("", "", node["id"]),
         )
         written += 1
     written += _record_v2_journals(db, job, seen)
@@ -406,7 +426,11 @@ def _persist(
     scopes: str,
     source_type: str,
     formula: str = "",
+    display_name: str = "",
 ) -> None:
+    shown = display_name.strip()
+    if shown == external_id:
+        shown = ""
     document = IngestDocument(
         id=uuid4().hex[:16],
         job_id=job.id,
@@ -446,7 +470,7 @@ def _persist(
             kind=kind if kind in {"purchase_order", "email", "invoice", "journal", "policy", "contract", "memo"} else "memo",
             source_system="decagon-corpus",
             external_id=external_id[:64],
-            title=f"{source_type.replace('_', ' ').title()} {external_id}"[:300],
+            title=(shown or external_id)[:300],
         )
     )
     db.flush()
@@ -465,7 +489,13 @@ def _persist(
             ingested_at=datetime.now(timezone.utc),
             availability_status="verified",
             availability_evidence="Availability comes from the company source manifest. The printed date is not availability.",
-            metadata_json={"case_ids": [case_id] if case_id else [], "entity_ref": entity_ref, "formula": formula, "job_id": job.id},
+            metadata_json={
+                "case_ids": [case_id] if case_id else [],
+                "entity_ref": entity_ref,
+                "formula": formula,
+                "job_id": job.id,
+                "display_name": shown,
+            },
         )
     )
     db.flush()
@@ -577,7 +607,47 @@ def _add_step(db: Session, job_id: str, sequence: int, name: str, detail: dict) 
 
 def _read(name: str) -> str:
     with zipfile.ZipFile(PACK) as archive:
-        return archive.read(ROOT + name).decode("utf-8")
+        return archive.read(ROOT + name).decode("utf-8-sig")
+
+
+_NAMES: dict[str, dict[str, str]] | None = None
+
+
+def _human_name(path: str = "", source_id: str = "", external_id: str = "") -> str:
+    """Human title for one source. A blank result means the record should show its id."""
+    names = _name_maps()
+    for key in (path, source_id):
+        title = names["files"].get((key or "").strip())
+        if title:
+            return title
+    return names["nodes"].get((external_id or "").strip(), "")
+
+
+def _name_maps() -> dict[str, dict[str, str]]:
+    global _NAMES
+    if _NAMES is not None:
+        return _NAMES
+    files: dict[str, str] = {}
+    nodes: dict[str, str] = {}
+    for row in _optional_csv("Human_Readable_Indexes/DOCUMENT_TITLE_INDEX.csv"):
+        title = (row.get("human_readable_title") or "").strip()
+        if not title:
+            continue
+        for key in (row.get("original_path") or "", row.get("source_id") or ""):
+            if key and key not in files:
+                files[key] = title
+    for row in _optional_csv("Human_Readable_Indexes/GRAPH_NODE_TITLE_INDEX.csv"):
+        node_id = (row.get("node_id") or "").strip()
+        title = (row.get("display_title") or "").strip()
+        if not node_id or not title:
+            continue
+        suffix = f" - {node_id}"
+        if title.endswith(suffix):
+            title = title[: -len(suffix)].strip()
+        if title and title != node_id:
+            nodes.setdefault(node_id, title)
+    _NAMES = {"files": files, "nodes": nodes}
+    return _NAMES
 
 
 def _manifest() -> list[dict]:
@@ -672,6 +742,7 @@ def _record_v2_journals(db: Session, job: IngestJob, seen: set[str]) -> int:
             references=references or [journal_id],
             scopes="finance,operations,controller",
             source_type="JOURNAL",
+            display_name=_human_name("", "", journal_id),
         )
         seen.add(journal_id)
         written += 1

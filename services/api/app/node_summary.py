@@ -130,6 +130,163 @@ def _grounded(text: str, source: str) -> bool:
     return all(found in allowed_ids for found in _ID.findall(text))
 
 
+_DATE = re.compile(r"\b\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}\b")
+_PERCENT = re.compile(r"\d+(?:\.\d+)?\s*%")
+_REVIEW_KEYS = ("THINKING", "ACTION", "VERDICT")
+
+
+def review_in_view(graph: dict, text: str) -> bool:
+    """A review may name only amounts and record ids already on the visible graph.
+
+    A difference between two visible amounts is allowed, because the review
+    states that gap. A withheld node contributes neither its amount nor its id.
+    """
+    amounts: list[float] = []
+    labels: list[str] = []
+    for node in graph.get("nodes") or []:
+        if node.get("redacted"):
+            continue
+        labels.append(str(node.get("label") or ""))
+        labels.append(str(node.get("case_id") or ""))
+        raw = node.get("amount")
+        if raw in (None, ""):
+            continue
+        try:
+            amounts.append(round(float(str(raw).replace(",", "")), 2))
+        except ValueError:
+            continue
+    for case in graph.get("cases") or []:
+        labels.append(str(case.get("id") or ""))
+        labels.append(str(case.get("vendor") or ""))
+    allowed_money = {f"{value:.2f}" for value in amounts}
+    for index, left in enumerate(amounts):
+        for right in amounts[index + 1 :]:
+            allowed_money.add(f"{abs(left - right):.2f}")
+    allowed_ids = set(_ID.findall(" ".join(labels)))
+    for amount in _MONEY.findall(text):
+        if f"{float(amount.replace(',', '')):.2f}" not in allowed_money:
+            return False
+    return all(found in allowed_ids for found in _ID.findall(text))
+
+
+def compose_review(graph: dict, node_id: str, brief: dict) -> dict:
+    """Turn a finished fact sheet into the three paragraphs the screen shows.
+
+    ``missing`` means the node is not in this graph. ``outside`` means the fact
+    sheet names an amount or record the graph does not show. The model is not
+    called in either case.
+    """
+    node = _node(graph, node_id)
+    if node is None:
+        return {"status": "missing"}
+    source = "\n".join(
+        [
+            str(brief.get("thinking") or ""),
+            str(brief.get("action") or ""),
+            *[str(line) for line in brief.get("lines") or []],
+            str(brief.get("verdict") or ""),
+        ]
+    )
+    if not review_in_view(graph, source):
+        return {"status": "outside"}
+    narrated = narrate_review(brief)
+    lines = [str(line) for line in brief.get("lines") or []]
+    return {
+        "status": "ok",
+        "narrated": narrated is not None,
+        "steps": [
+            {"kind": "Thinking", "text": narrated["THINKING"] if narrated else brief.get("thinking") or ""},
+            {"kind": "Action", "text": narrated["ACTION"] if narrated else brief.get("action") or "", "lines": lines},
+            {"kind": "Verdict", "text": narrated["VERDICT"] if narrated else brief.get("verdict") or ""},
+        ],
+    }
+
+
+def narrate_review(brief: dict) -> dict | None:
+    """Rephrase a review whose records were already chosen.
+
+    The model does not select records, amounts, or suggestions. None means the
+    caller should keep the brief's own sentences.
+    """
+    source = "\n".join(
+        part
+        for part in (
+            str(brief.get("thinking") or ""),
+            str(brief.get("action") or ""),
+            *[str(line) for line in brief.get("lines") or []],
+            str(brief.get("verdict") or ""),
+        )
+        if part
+    )
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not key or not source:
+        return None
+    model = os.environ.get("OPENROUTER_MODEL", "").strip() or "openai/gpt-4o-mini"
+    try:
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": model,
+                "temperature": 0.6,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Rewrite a review that was already calculated. The records, amounts, "
+                            "and dates are fixed. Write three short paragraphs: what disagrees, "
+                            "which records were compared, and what follows. Use only names, amounts, "
+                            "and dates from the fact sheet. Do not add a record, a formula, a person, "
+                            "a mailbox, or a confidence score. If a match is not proof of the source, "
+                            "keep that. If a record is knowable after a date, keep that date. "
+                            "Reply in exactly this shape:\n"
+                            "THINKING\n<one paragraph>\nACTION\n<one paragraph>\nVERDICT\n<one paragraph>"
+                        ),
+                    },
+                    {"role": "user", "content": source},
+                ],
+            },
+            timeout=12,
+        )
+        response.raise_for_status()
+        text = str(response.json()["choices"][0]["message"]["content"]).strip()
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+        return None
+    parsed = _review_sections(text)
+    if parsed is None:
+        return None
+    rewritten = "\n".join(parsed.values())
+    if _PERCENT.search(rewritten) or not _grounded(rewritten, source) or not _dates_grounded(rewritten, source):
+        return None
+    return parsed
+
+
+def _review_sections(text: str) -> dict | None:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    parts: dict[str, list[str]] = {}
+    current = ""
+    for line in cleaned.splitlines():
+        key = line.strip().upper().rstrip(":")
+        if key in _REVIEW_KEYS:
+            current = key
+            parts[current] = []
+            continue
+        if current:
+            parts[current].append(line.strip())
+    parsed = {key: " ".join(parts.get(key) or []).strip() for key in _REVIEW_KEYS}
+    if any(not parsed[key] for key in _REVIEW_KEYS):
+        return None
+    return parsed
+
+
+def _dates_grounded(text: str, source: str) -> bool:
+    allowed = set(_DATE.findall(source))
+    return all(found in allowed for found in _DATE.findall(text))
+
+
 _STRUCTURAL = {"FILED_WITH", "ATTACHED", "CITES", "MENTIONS", "LEDGER", "DERIVED_FROM", "SOURCE_CANDIDATE", "GOVERNS", "RECONCILES_WITH", "AMBIGUOUS"}
 
 

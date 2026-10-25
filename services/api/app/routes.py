@@ -45,6 +45,13 @@ class CompareIn(BaseModel):
     mode: str = "audit"
 
 
+class ReviewBrief(BaseModel):
+    thinking: str = Field(min_length=1, max_length=2000)
+    action: str = Field(min_length=1, max_length=2000)
+    lines: list[str] = Field(default_factory=list, max_length=8)
+    verdict: str = Field(min_length=1, max_length=4000)
+
+
 def _as_of(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
@@ -103,6 +110,37 @@ def company_node_summary(
     if summary is None:
         raise HTTPException(status_code=404, detail="This node is not in the snapshot.")
     return summary
+
+
+@router.post("/company-graph/investigate")
+def company_investigate(
+    brief: ReviewBrief,
+    node_id: str,
+    organization_id: str = "org-decagon",
+    actor_id: str = "actor-decagon-finance",
+    as_of: str = "2025-12-15T12:00:00+00:00",
+    mode: str = "audit",
+    view: str = "",
+    db: Session = Depends(db_session),
+):
+    """Narrate a review. The records were already chosen; the model only rephrases them."""
+    from fastapi import HTTPException
+
+    from app.company_graph import company_graph
+    from app.ingest.decagon import ensure_company
+    from app.node_summary import compose_review
+
+    if any(len(line) > 240 for line in brief.lines):
+        raise HTTPException(status_code=422, detail="The review could not be read.")
+    if organization_id == "org-decagon":
+        ensure_company(db)
+    graph = company_graph(db, organization_id, actor_id, utc(as_of), mode, view or None)
+    result = compose_review(graph, node_id, brief.model_dump())
+    if result["status"] == "missing":
+        raise HTTPException(status_code=404, detail="This node is not in the snapshot.")
+    if result["status"] == "outside":
+        raise HTTPException(status_code=422, detail="The review is not limited to visible records.")
+    return {"narrated": result["narrated"], "steps": result["steps"]}
 
 
 @router.get("/company-graph/documents/{version_id}")

@@ -48,6 +48,7 @@ export type GraphNode = {
   type: string;
   label: string;
   title: string;
+  document_id?: string;
   amount: string | null;
   origin: string;
   formula?: string;
