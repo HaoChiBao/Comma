@@ -79,6 +79,8 @@ export function ObsidianGraph({
   const simAlpha = useRef<number>(1.0);
   const isDraggingNode = useRef<string | null>(null);
   const isRotating = useRef<{ startX: number; startY: number; startRotY: number; startRotX: number; startPanX: number; startPanY: number; isPan: boolean } | null>(null);
+  const isHoveredCanvas = useRef<boolean>(false);
+  const hoverRef = useRef<string | null>(null);
 
   const [hover, setHover] = useState<string | null>(null);
 
@@ -212,8 +214,9 @@ export function ObsidianGraph({
       if (!ctx) return;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 
-      // Slow continuous 360-degree rotation (paused only when actively dragging/rotating)
-      if (camera.current.autoRotate && !isRotating.current && !isDraggingNode.current) {
+      // Slow continuous 360-degree rotation (stops immediately when user hovers canvas or a node)
+      const isHovering = isHoveredCanvas.current || hoverRef.current !== null || Boolean(hover);
+      if (camera.current.autoRotate && !isRotating.current && !isDraggingNode.current && !isHovering) {
         camera.current.rotY += 0.0016; // ~1 full rotation every 65 seconds
       }
 
@@ -382,8 +385,18 @@ export function ObsidianGraph({
             return;
           }
 
+          isHoveredCanvas.current = true;
           const hitNode = findNodeAtScreen(event.clientX, event.clientY);
+          hoverRef.current = hitNode ? hitNode.id : null;
           setHover(hitNode ? hitNode.id : null);
+        }}
+        onPointerEnter={() => {
+          isHoveredCanvas.current = true;
+        }}
+        onPointerLeave={() => {
+          isHoveredCanvas.current = false;
+          hoverRef.current = null;
+          setHover(null);
         }}
         onPointerUp={(event) => {
           if (isDraggingNode.current) {
