@@ -22,6 +22,6 @@ Setup: finish the company ingest, generate `fixtures/Decagon_Accruals.xlsx`, sta
 
 **1:40** Switch **Viewing as** to Noah Patel, auditor, then back to Avery Lin, accountant. Inspect `F8` (C07) to compare the role-scoped evidence. The finding status always matches the API response.
 
-**2:10** Return to Avery and Sep 30. Select `A1:H11` and click **Scan selection & add notes**. Seven accruals are flagged and highlighted; each receives a native note. Hover `F2` to read its note. Click **Clear WorldState highlights and notes**; original fills return, WorldState notes are deleted, and values remain unchanged.
+**2:10** Return to Avery and Sep 30. The bounded sheet scan highlights accruals marked for review. Inspect `F2`, use **Add a note** to enter a custom native note, then hover the cell to read it. Click **Mark reviewed** to clear that cell's highlight. Values remain unchanged.
 
 Reset the local SQLite file by deleting `services/api/worldstate.db` and starting the API again. Docker starts from an empty Postgres volume and seeds on startup.

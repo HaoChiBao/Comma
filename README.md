@@ -57,11 +57,7 @@ The walkthrough is in `docs/DEMO_SCRIPT.md`. Limits are in `docs/ARCHITECTURE.md
 
 The actor and **as of** controls run each trace against a sealed snapshot. The idle view lists flagged cells from a bounded scan of the active sheet. Select a cell and click **Inspect** to open its trace. Click an available source in the graph detail to open the source panel. Excluded sources remain generic and do not expose their amount, date, id, or text in the sidebar.
 
-**Scan selection & add notes** highlights flagged cells in the selected range and writes a native Excel note on each one, using the Notes API (ExcelApi 1.18), so hovering shows the finding.
-- A WorldState note is updated on the next scan; a note someone else wrote is left alone.
-- On older Excel builds the highlights still apply, and the pane says notes are unavailable.
-- **Clear WorldState highlights and notes** restores the original fills and deletes only WorldState's notes.
-- Footer review actions are visual placeholders; they are not saved to the backend.
+The bounded scan of the active sheet highlights cells marked for review. **Mark reviewed** clears that cell's WorldState highlight. **Add a note** opens a composer for a custom native Excel note on the inspected cell; a note someone else wrote is left alone, and older Excel builds report when Notes are unavailable. These review actions are local to the workbook and are not saved to the backend.
 
 The add-in never writes values or formulas.
 
@@ -124,7 +120,7 @@ Tests:
 - `cd apps/excel-addin && npm test`
 - `cd services/api && python -m pytest tests/test_workbook.py`
 
-Reset: delete `services/api/worldstate.db` and restart the API. In Excel, click **Clear WorldState highlights and notes**.
+Reset the API by deleting `services/api/worldstate.db` and restarting it. Review highlights are cleared per cell with **Mark reviewed**; custom notes can be removed from Excel's note menu.
 
 ## Document ingestion
 

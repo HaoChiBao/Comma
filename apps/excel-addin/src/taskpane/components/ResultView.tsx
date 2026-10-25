@@ -81,7 +81,7 @@ export function ResultView({ trace, vendor, selected, onSelect, onOpenSource, on
               {item.source_id ? <button type="button" className="ws-link" onClick={() => onOpenSource(item.source_id!)} disabled={busy}>Open source</button> : null}
             </div>
           ) : trace.items.length ? (
-            <p className="hint">Click a circle to see what it is and how it connects to {trace.cell.address}.</p>
+            <p className="hint">Click a rectangle to see what it is and how it connects to {trace.cell.address}.</p>
           ) : null}
           {nothingLinked(trace.items) ? <p className="mute none-linked">Nothing in the ERP, inbox or drive points to this number.</p> : null}
         </div>
