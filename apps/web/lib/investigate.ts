@@ -158,14 +158,30 @@ function pickSuggestions(
   precedents: Precedent[],
   ruleOn: (id: string) => boolean
 ): AgentSuggestion[] {
+  const offFan = collectSuggestions(node, linked, drawn, blocked, precedents, ruleOn, true);
+  if (offFan.length > 0) return offFan;
+  // The visible fan sometimes lists the whole neighborhood. Those records are still real neighbors.
+  return collectSuggestions(node, linked, drawn, blocked, precedents, ruleOn, false);
+}
+
+function collectSuggestions(
+  node: GraphNode,
+  linked: Linked[],
+  drawn: Set<string>,
+  blocked: Set<string>,
+  precedents: Precedent[],
+  ruleOn: (id: string) => boolean,
+  skipDrawn: boolean
+): AgentSuggestion[] {
   const chosen: AgentSuggestion[] = [];
   const seen = new Set<string>();
+  const fresh = skipDrawn ? " and is not already drawn" : "";
 
   const consider = (item: Linked, ruleId: string, reason: string) => {
     if (chosen.length >= 3) return;
     const other = item.node;
     if (!other?.id || seen.has(other.id) || other.id === node.id) return;
-    if (drawn.has(other.id) || blocked.has(other.id)) return;
+    if ((skipDrawn && drawn.has(other.id)) || blocked.has(other.id)) return;
     if (!isDocument(other) || other.label === node.label) return;
     if (pairDeprecated(precedents, node.id, other.id)) return;
     seen.add(other.id);
@@ -186,26 +202,26 @@ function pickSuggestions(
       if (!sameCase(node, item.node)) continue;
       const claim = item.types.find((type) => CLAIM_TYPES.has(type));
       if (!claim) continue;
-      consider(item, "visibility:claim-link", `it is a ${claim} link in ${node.case_id || "this snapshot"} and is not already drawn`);
+      consider(item, "visibility:claim-link", `it is a ${claim} link in ${node.case_id || "this snapshot"}${fresh}`);
     }
   }
   if (ruleOn("visibility:earlier-amount")) {
     for (const item of linked) {
       if (!sameCase(node, item.node) || !item.node.amount || !isEarlier(item.node, node)) continue;
-      consider(item, "visibility:earlier-amount", "it is an earlier visible amount in the same case and is not already drawn");
+      consider(item, "visibility:earlier-amount", `it is an earlier visible amount in the same case${fresh}`);
     }
   }
   if (ruleOn("visibility:undrawn-neighbor")) {
     for (const item of linked) {
       if (!sameCase(node, item.node)) continue;
-      consider(item, "visibility:undrawn-neighbor", "it is a visible neighbor and is not already drawn");
+      consider(item, "visibility:undrawn-neighbor", `it is a visible neighbor${fresh}`);
     }
   }
   if (ruleOn("visibility:claim-link")) {
     for (const item of linked) {
       const claim = item.types.find((type) => CLAIM_TYPES.has(type));
       if (!claim) continue;
-      consider(item, "visibility:claim-link", `it is a ${claim} link and is not already drawn`);
+      consider(item, "visibility:claim-link", `it is a ${claim} link${fresh}`);
     }
   }
   return chosen;

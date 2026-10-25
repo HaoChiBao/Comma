@@ -100,14 +100,37 @@ export function NodeSummary({
   );
 }
 
+function isRecord(node: GraphNode) {
+  const kind = node.type.toUpperCase();
+  return kind !== "VENDOR" && kind !== "ENTITY" && kind !== "TRANSACTION" && node.origin !== "entity";
+}
+
+function citationToken(node: GraphNode) {
+  const label = node.label?.trim() ?? "";
+  const documentId = node.document_id?.trim() ?? "";
+  if (documentId && documentId !== label) return documentId;
+  return label;
+}
+
 function linkRecords(text: string, nodes: GraphNode[], currentId: string, onOpen: (id: string) => void) {
-  const byLabel = new Map<string, string>();
+  const current = nodes.find((node) => node.id === currentId);
+  const selfToken = current ? citationToken(current) : "";
+  const byToken = new Map<string, string>();
   for (const node of nodes) {
-    const label = node.label?.trim();
-    if (!label || label.length < 3 || node.id === currentId || byLabel.has(label)) continue;
-    byLabel.set(label, node.id);
+    if (node.id === currentId || !isRecord(node)) continue;
+    const token = citationToken(node);
+    if (!token || token.length < 3 || byToken.has(token)) continue;
+    byToken.set(token, node.id);
   }
-  const labels = [...byLabel.keys()].filter((label) => text.includes(label)).sort((a, b) => b.length - a.length);
+  // A document id is the name the summary prints. It wins over a hub that reused that id as its label.
+  for (const node of nodes) {
+    if (node.id === currentId) continue;
+    const documentId = node.document_id?.trim() ?? "";
+    if (!documentId || documentId.length < 3) continue;
+    byToken.set(documentId, node.id);
+  }
+  if (selfToken) byToken.delete(selfToken);
+  const labels = [...byToken.keys()].filter((label) => text.includes(label)).sort((a, b) => b.length - a.length);
   if (labels.length === 0) return text;
   const pattern = new RegExp(labels.map((label) => escapeRegExp(label)).join("|"), "g");
   const parts: Array<string | { label: string; id: string; at: number }> = [];
@@ -115,7 +138,7 @@ function linkRecords(text: string, nodes: GraphNode[], currentId: string, onOpen
   for (const match of text.matchAll(pattern)) {
     const at = match.index ?? 0;
     const label = match[0];
-    const id = byLabel.get(label);
+    const id = byToken.get(label);
     if (!id || !bounded(text, at, label.length)) continue;
     if (at > cursor) parts.push(text.slice(cursor, at));
     parts.push({ label, id, at });

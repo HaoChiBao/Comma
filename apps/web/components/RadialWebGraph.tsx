@@ -253,6 +253,16 @@ function layoutSuggestionFan<T extends { id: string; anchorId: string; label: st
     });
   }
 
+  // A missed slot used to drop two captions on the same point, hiding one suggestion.
+  placed.sort((a, b) => a.y - b.y || a.x - b.x);
+  for (let index = 1; index < placed.length; index += 1) {
+    const previous = placed[index - 1];
+    const current = placed[index];
+    if (Math.abs(current.x - previous.x) < 220 && current.y < previous.y + FLOW_ROW * 0.85) {
+      current.y = previous.y + FLOW_ROW;
+    }
+  }
+
   return placed;
 }
 
@@ -1097,11 +1107,7 @@ export function RadialWebGraph({
       minY = Math.min(minY, node.y - 28);
       maxY = Math.max(maxY, node.y + 22);
     }
-    const framedGhosts = layoutSuggestionFan(
-      suggestions.filter((item) => !visibleIds.has(item.id)),
-      treeNodes,
-      rootId
-    );
+    const framedGhosts = layoutSuggestionFan(suggestions, treeNodes, rootId);
     for (const ghost of framedGhosts) {
       const caption = suggestionCaption(ghost);
       minX = Math.min(minX, ghost.x - 24);
@@ -1128,7 +1134,7 @@ export function RadialWebGraph({
       x: visibleCenterX - dimensions.w / 2 - midX * k,
       y: visibleCenterY - dimensions.h / 2 - midY * k,
     });
-  }, [treeNodes, upstreamNodes, dimensions.w, dimensions.h, selected, suggestions, visibleIds, rootId]);
+  }, [treeNodes, upstreamNodes, dimensions.w, dimensions.h, selected, suggestions, rootId]);
 
   const inferredPairs = useMemo(() => {
     const pairs = new Set<string>();
@@ -1140,12 +1146,8 @@ export function RadialWebGraph({
   }, [inferredLinks]);
 
   const ghostLayout = useMemo(() => {
-    return layoutSuggestionFan(
-      suggestions.filter((item) => !visibleIds.has(item.id)),
-      treeNodes,
-      rootId
-    );
-  }, [suggestions, visibleIds, treeNodes, rootId]);
+    return layoutSuggestionFan(suggestions, treeNodes, rootId);
+  }, [suggestions, treeNodes, rootId]);
 
   // Stable, Calm Camera Framing: keeps root anchored on the left without jarring whip-pans.
   // A Center click holds this camera until the selection changes.

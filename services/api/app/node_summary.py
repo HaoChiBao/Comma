@@ -1,7 +1,9 @@
 """Summarize one node from a graph that was already filtered by time and role.
 
-The summary is written from that graph. A hidden document is not loaded, and a
-model may only rephrase the brief. Any amount or id it adds is discarded.
+The summary is written from that graph. A record with its own document id is
+named by that id, so a long display name stays off the page. A hidden document
+is not loaded, and a model may only rephrase the brief. Any amount or id it
+adds is discarded, and so is a long title it puts back.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ def summarize_node(graph: dict, node_id: str, texts: dict[str, str] | None = Non
     peers = _hub_peers(graph, node, direct)
     matter = _matter(_dedupe(focused + peers), node)
     bodies = texts or {}
+    cited_ids, short_titles = _citation_facts([node, *[link["node"] for link in matter]])
     brief = {
         "node_id": node_id,
         "label": node.get("label") or "This record",
@@ -53,8 +56,12 @@ def summarize_node(graph: dict, node_id: str, texts: dict[str, str] | None = Non
         "relationships": _relationships(node, other_cases),
         "connected_to": _connected(matter, bodies),
         "risks": _risks(node, matter),
+        "_cited_ids": cited_ids,
+        "_titles": short_titles,
     }
     brief["summary"] = narrate(brief)
+    brief.pop("_cited_ids", None)
+    brief.pop("_titles", None)
     return brief
 
 
@@ -95,8 +102,9 @@ def narrate(brief: dict) -> str:
                     {
                         "role": "system",
                         "content": (
-                            "Leave the brief as a few plain sentences. Do not add a document, "
-                            "a formula, an amount, or any comment about why it matters."
+                            "Leave the brief as a few plain sentences. Keep every record id exactly "
+                            "as written. Do not replace an id with a title or a longer name. "
+                            "Do not add a document, a formula, an amount, or any comment about why it matters."
                         ),
                     },
                     {"role": "user", "content": prose},
@@ -108,7 +116,7 @@ def narrate(brief: dict) -> str:
         text = str(response.json()["choices"][0]["message"]["content"]).strip()
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
         return prose
-    if not text or not _grounded(text, prose):
+    if not text or not _acceptable_rewrite(text, prose, brief):
         return prose
     return text
 
@@ -128,6 +136,28 @@ def _grounded(text: str, source: str) -> bool:
     if any(amount not in allowed_money for amount in _MONEY.findall(text)):
         return False
     return all(found in allowed_ids for found in _ID.findall(text))
+
+
+def _acceptable_rewrite(text: str, source: str, brief: dict) -> bool:
+    """A rewrite keeps the brief's ids and does not put a shortened title back."""
+    if not _grounded(text, source):
+        return False
+    if not set(_ID.findall(source)) <= set(_ID.findall(text)):
+        return False
+    for cited in brief.get("_cited_ids") or []:
+        token = str(cited).strip()
+        if token and not _has_token(text, token):
+            return False
+    titles = []
+    label = str(brief.get("label") or "").strip()
+    if label:
+        titles.append(label)
+    titles.extend(str(item).strip() for item in brief.get("_titles") or [])
+    return all(not title or title in source or title not in text for title in titles)
+
+
+def _has_token(text: str, token: str) -> bool:
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", text) is not None
 
 
 _DATE = re.compile(r"\b\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}\b")
@@ -291,17 +321,17 @@ _STRUCTURAL = {"FILED_WITH", "ATTACHED", "CITES", "MENTIONS", "LEDGER", "DERIVED
 
 
 def _what(node: dict, texts: dict[str, str]) -> str:
-    label = node.get("label") or "This record"
+    name = _record_name(node, "This record")
     if node.get("redacted"):
-        return f"{label} is outside this snapshot. The amount and text are withheld."
+        return f"{name} is outside this snapshot. The amount and text are withheld."
     kind = _kind_name(node)
     if kind == "vendor":
-        return f"{label} is a vendor. Documents filed with it name this vendor."
+        return f"{name} is a vendor. Documents filed with it name this vendor."
     if kind == "transaction":
-        return f"{label} is a transaction. The attached documents are its records."
+        return f"{name} is a transaction. The attached documents are its records."
     amount = node.get("amount")
     money = f" for ${amount}" if amount else ""
-    sentence = f"{label} is {_kind_phrase(kind)}{money}."
+    sentence = f"{name} is {_kind_phrase(kind)}{money}."
     excerpt = _line(node, texts)
     if excerpt:
         sentence += f" It says: {excerpt}."
@@ -311,22 +341,22 @@ def _what(node: dict, texts: dict[str, str]) -> str:
 def _relationships(node: dict, other_cases: list[dict]) -> str:
     if not any(link["type"] == "CONTRADICTS" for link in other_cases):
         return ""
-    label = node.get("label") or "This record"
-    return f"Other cases also contradict {label}."
+    name = _record_name(node, "This record")
+    return f"Other cases also contradict {name}."
 
 
 def _connected(matter: list[dict], texts: dict[str, str]) -> str:
     sentences = []
     for link in matter:
         other = link["node"]
-        label = other.get("label") or "A connected record"
+        name = _record_name(other, "A connected record")
         if other.get("redacted"):
-            sentences.append(f"{label} is withheld.")
+            sentences.append(f"{name} is withheld.")
             continue
         kind = _kind_name(other)
         amount = other.get("amount")
         money = f" for ${amount}" if amount else ""
-        sentence = f"{label} is {_kind_phrase(kind)}{money}"
+        sentence = f"{name} is {_kind_phrase(kind)}{money}"
         excerpt = _line(other, texts)
         if excerpt and kind not in {"vendor", "transaction"}:
             sentence += f" and says: {excerpt}"
@@ -346,10 +376,37 @@ def _risks(node: dict, matter: list[dict]) -> str:
             amounts.append(str(amount))
     if len(set(amounts)) < 2:
         if str(node.get("type") or "") in {"JOURNAL", "DECISION"} and node.get("origin") == "unexplained":
-            label = node.get("label") or "This record"
-            return f"No earlier visible amount explains {label}."
+            name = _record_name(node, "This record")
+            return f"No earlier visible amount explains {name}."
         return ""
     return "The amounts disagree."
+
+
+def _record_name(node: dict, fallback: str) -> str:
+    """Document id when the record has a title besides that id. Otherwise the label."""
+    label = str(node.get("label") or "").strip()
+    document_id = str(node.get("document_id") or "").strip()
+    if document_id and document_id != label:
+        return document_id
+    return label or fallback
+
+
+def _citation_facts(nodes: list[dict]) -> tuple[list[str], list[str]]:
+    """Ids the prose uses, and display names that were shortened away from it."""
+    cited: list[str] = []
+    titles: list[str] = []
+    for item in nodes:
+        label = str(item.get("label") or "").strip()
+        document_id = str(item.get("document_id") or "").strip()
+        name = _record_name(item, "")
+        if document_id and name == document_id:
+            if document_id not in cited:
+                cited.append(document_id)
+        elif name and _ID.fullmatch(name) and name not in cited:
+            cited.append(name)
+        if document_id and label and document_id != label and label not in titles:
+            titles.append(label)
+    return cited, titles
 
 
 def _node(graph: dict, node_id: str) -> dict | None:
