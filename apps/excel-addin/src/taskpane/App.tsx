@@ -5,8 +5,8 @@ import { LoadingView } from "./components/LoadingView";
 import { ResultView } from "./components/ResultView";
 import { ScanResults } from "./components/ScanResults";
 import { SourcePanel } from "./components/SourcePanel";
-import { clearHighlights, markCells, settingsStore } from "./office/formatting";
-import { NotesUnsupportedError, clearNotes, noteSettingsStore, supportsNotes, writeFindingNotes, type NoteFinding, type NoteResult } from "./office/notes";
+import { clearHighlight, clearHighlights, markCells, settingsStore } from "./office/formatting";
+import { NotesUnsupportedError, clearNotes, noteSettingsStore, supportsNotes, writeCustomNote, writeFindingNotes, type NoteFinding, type NoteResult } from "./office/notes";
 import { readPrecedents, readSelectedCell, readSelectedRange, readSelection, readUsedRange, readWorkbookId, selectCell, supportsPrecedents, watchSelection, type RangeCells, type SelectionSummary } from "./office/selection";
 import { createClient, describeError } from "./services/worldstateApi";
 import type { Actor, InspectRequest, ScanFinding, ScanResult, SourceDetail, Trace, TraceGraph } from "./types";
@@ -55,18 +55,44 @@ export function App() {
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
+  const noticeTimer = React.useRef<number | null>(null);
 
   const token = React.useRef(0);
   const phaseRef = React.useRef<Phase>("idle");
   const traceRef = React.useRef<Trace | null>(null);
   const requestRef = React.useRef<InspectRequest | null>(null);
   const filtersRef = React.useRef({ asOf, actorId });
+  const initialReviewHighlightsDone = React.useRef(false);
+  const initialReviewHighlightsPending = React.useRef(false);
   phaseRef.current = phase;
   traceRef.current = trace;
   requestRef.current = request;
   filtersRef.current = { asOf, actorId };
   const preset = asOfPreset(asOf);
   const actor = actors.find((item) => item.id === actorId);
+
+  function clearNoticeTimer() {
+    if (noticeTimer.current !== null) {
+      window.clearTimeout(noticeTimer.current);
+      noticeTimer.current = null;
+    }
+  }
+
+  function dismissNotice() {
+    clearNoticeTimer();
+    setNotice(null);
+  }
+
+  function showNotice(message: string) {
+    clearNoticeTimer();
+    setNotice(message);
+    noticeTimer.current = window.setTimeout(() => {
+      setNotice(null);
+      noticeTimer.current = null;
+    }, 4000);
+  }
+
+  React.useEffect(() => () => clearNoticeTimer(), []);
 
   const noteContext = () => ({
     asOfLabel: AS_OF_PRESETS.find((item) => item.value === asOf)?.label ?? formatDate(asOf),
@@ -86,6 +112,18 @@ export function App() {
         const range = await readUsedRange(context);
         if (!range) return { result: null, range: null };
         const scan = await client.scan({ workbook_id: workbookId, sheet_name: range.sheetName, range_address: range.rangeAddress, cells: range.cells, as_of: date, actor_id: actor });
+        if (!initialReviewHighlightsDone.current && !initialReviewHighlightsPending.current) {
+          initialReviewHighlightsPending.current = true;
+          try {
+            const reviewMarks = scan.findings
+              .filter((finding) => finding.status === "review")
+              .map((finding) => ({ key: finding.cell, status: finding.status }));
+            await markCells(context, reviewMarks, settingsStore());
+            initialReviewHighlightsDone.current = true;
+          } finally {
+            initialReviewHighlightsPending.current = false;
+          }
+        }
         return { result: scan, range };
       });
       if (result.result && result.range) {
@@ -134,14 +172,16 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function run(label: string, task: () => Promise<void>) {
+  async function run(label: string, task: () => Promise<void>): Promise<boolean> {
     setBusy(label);
     setError(null);
-    setNotice(null);
+    dismissNotice();
     try {
       await task();
+      return true;
     } catch (err) {
       setError(describeError(err));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -230,7 +270,7 @@ export function App() {
       const marked = await markCells(context, result.findings.map((item) => ({ key: item.cell, status: item.status })), settingsStore());
       setScanResult(result);
       const notes = await addNotes(context, result.findings.map((item) => ({ key: item.cell, status: item.status, title: item.title, summary: item.summary, difference: item.difference })));
-      setNotice((marked ? `Highlighted ${marked} cell(s). Values were not changed.` : "Nothing to highlight.") + notes);
+      showNotice((marked ? `Highlighted ${marked} cell(s). Values were not changed.` : "Nothing to highlight.") + notes);
     });
   });
 
@@ -240,24 +280,33 @@ export function App() {
       await clearNotes(context, noteSettingsStore()),
     ]);
     const parts = [restored ? `restored the original fill on ${restored} cell(s)` : "", removed ? `removed ${removed} WorldState note(s)` : ""].filter(Boolean);
-    setNotice(parts.length ? `Cleared: ${parts.join(" and ")}.` : "No WorldState highlights or notes to clear.");
+    showNotice(parts.length ? `Cleared: ${parts.join(" and ")}.` : "No WorldState highlights or notes to clear.");
   });
 
-  const noteCurrent = () => run("Adding note", async () => {
-    if (!trace) return;
-    const finding = { key: trace.cell.key, status: trace.status, title: trace.title, summary: trace.summary, difference: trace.difference };
-    const notes = await Excel.run(async (context) => {
-      await markCells(context, [{ key: finding.key, status: finding.status }], settingsStore());
-      return addNotes(context, [finding]);
+  const noteCurrent = async (message: string): Promise<boolean> => {
+    if (!trace) return false;
+    return run("Adding note", async () => {
+      const result = await Excel.run((context) => writeCustomNote(context, trace.cell.key, message, noteSettingsStore()));
+      showNotice(result === "skipped"
+        ? "This cell already has a note that WorldState did not create; it was left unchanged."
+        : `${result === "written" ? "Added" : "Updated"} note on ${trace.cell.address}.`);
     });
-    setNotice(notes ? notes.trim() : "This cell is supported, so it gets no note.");
-  });
+  };
 
   const goToCell = (key: string) => run("Selecting", () => Excel.run((context) => selectCell(context, key)));
   const openSource = (sourceId: string) => run("Opening source", async () => {
     if (trace) setSource(await client.source(sourceId, trace.trace_id));
   });
-  const act = (label: string) => setNotice(`${label} · not saved yet`);
+  const act = (label: string) => {
+    if (label !== "Mark reviewed" || !trace) {
+      showNotice(`${label} · not saved yet`);
+      return;
+    }
+    void run(label, async () => {
+      const cleared = await Excel.run((context) => clearHighlight(context, trace.cell.key, settingsStore()));
+      showNotice(cleared ? "Highlight cleared. Mark reviewed is not saved yet." : "No WorldState highlight to clear. Mark reviewed is not saved yet.");
+    });
+  };
 
   const selectionCell = selection?.single ? selection.cell : null;
   const sidebarTrace = trace && graph && request ? toSidebarTrace(trace, graph, request) : null;
@@ -280,7 +329,7 @@ export function App() {
       <div className="scroll">
         {busy ? <p className="status">{busy}…</p> : null}
         {error ? <p className="inline-error" role="alert">{error}</p> : null}
-        {notice ? <p className="notice">{notice}</p> : null}
+        {notice ? <p className="notice" role="status" aria-live="polite">{notice}</p> : null}
         {backend === "down" && !error ? <p className="inline-error" role="alert">WorldState API is not reachable. Your workbook was not changed.</p> : null}
 
         {phase === "idle" ? <IdleView
@@ -299,7 +348,7 @@ export function App() {
           selected={selectedItem}
           onSelect={setSelectedItem}
           onOpenSource={openSource}
-          onAddNote={() => void noteCurrent()}
+          onAddNote={noteCurrent}
           onAction={act}
           busy={!!busy}
         /> : null}

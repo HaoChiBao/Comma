@@ -88,3 +88,18 @@ export async function clearHighlights(context: Excel.RequestContext, store: Ledg
   await store.save([]);
   return ledger.length;
 }
+
+/** Restores one cell's original fill and removes only its WorldState ledger entry. */
+export async function clearHighlight(context: Excel.RequestContext, key: string, store: LedgerStore): Promise<boolean> {
+  const ledger = store.load();
+  const entry = ledger.find((item) => item.key === key);
+  if (!entry) return false;
+
+  const { sheet, address } = splitAddress(key);
+  const fill = context.workbook.worksheets.getItem(sheet).getRange(address).format.fill;
+  if (entry.previousColor) fill.color = entry.previousColor;
+  else fill.clear();
+  await context.sync();
+  await store.save(ledger.filter((item) => item.key !== key));
+  return true;
+}
