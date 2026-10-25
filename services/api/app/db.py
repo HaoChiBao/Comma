@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -17,18 +17,27 @@ def configure(database_url: str) -> None:
         kwargs["connect_args"] = {"check_same_thread": False}
         if database_url.endswith(":memory:"):
             kwargs["poolclass"] = StaticPool
+    elif database_url.startswith("postgres"):
+        _prepare_postgres_schema(database_url)
+        for table in Base.metadata.tables.values():
+            table.schema = "worldstate"
     _engine = create_engine(database_url, future=True, **kwargs)
-    if database_url.startswith("postgres"):
-
-        @event.listens_for(_engine, "connect")
-        def _worldstate_schema(dbapi_connection, _record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("CREATE SCHEMA IF NOT EXISTS worldstate")
-            cursor.execute("SET search_path TO worldstate")
-            cursor.close()
-
     _Session = sessionmaker(_engine, expire_on_commit=False, future=True)
     Base.metadata.create_all(_engine)
+
+
+def _prepare_postgres_schema(database_url: str) -> None:
+    bootstrap = create_engine(database_url, future=True)
+    with bootstrap.begin() as conn:
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS worldstate"))
+        ready = conn.execute(text("SELECT to_regclass('worldstate.organizations')")).scalar()
+        populated = False
+        if ready:
+            populated = bool(conn.execute(text("SELECT 1 FROM worldstate.organizations LIMIT 1")).scalar())
+        if not populated:
+            conn.execute(text("DROP SCHEMA IF EXISTS worldstate CASCADE"))
+            conn.execute(text("CREATE SCHEMA worldstate"))
+    bootstrap.dispose()
 
 
 def engine():

@@ -15,11 +15,17 @@ def seed(db: Session) -> None:
         [
             Organization(id=ORG, name="Acme Corp"),
             Organization(id=ORG_BETA, name="Beta Industrial"),
+        ]
+    )
+    db.flush()
+    db.add_all(
+        [
             Actor(id=MAYA, organization_id=ORG, name="Maya Chen", role="accountant"),
             Actor(id=JORDAN, organization_id=ORG, name="Jordan Hale", role="auditor"),
             Actor(id=RILEY, organization_id=ORG_BETA, name="Riley Quinn", role="accountant"),
         ]
     )
+    db.flush()
     versions, cases = world()
     artifacts: dict[str, SourceArtifact] = {}
     now = datetime.now(timezone.utc)
