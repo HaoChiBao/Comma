@@ -104,6 +104,7 @@ export function RadialWebGraph({
   const [dimensions, setDimensions] = useState({ w: 1000, h: 700 });
   const [camera, setCamera] = useState({ x: -280, y: 0, k: 1 });
   const isPanning = useRef<{ startX: number; startY: number; camX: number; camY: number } | null>(null);
+  const heldSelection = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -176,6 +177,9 @@ export function RadialWebGraph({
 
   // Undo History Stack (Max 40)
   const historyStack = useRef<HistorySnapshot[]>([]);
+  // The root reset and the selection reveal both write the tree. Skip one reveal
+  // pass so it grafts onto the freshly reset tree instead of the stale one.
+  const skipReveal = useRef(false);
 
   // Positions for transitions
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -426,8 +430,77 @@ export function RadialWebGraph({
   // Populate Forward Flow when rootId or upstreamTrail changes
   useEffect(() => {
     if (!rootId || !nodeMap.has(rootId)) return;
+    skipReveal.current = true;
     initializeFlowForRoot(rootId, upstreamTrail);
   }, [rootId, upstreamTrail, initializeFlowForRoot]);
+
+  // Bring a selection that sits outside the expanded web onto the tree,
+  // so spotlight has a real path instead of dimming every visible node.
+  // Upstream origins and shelf alternatives already have a place on screen.
+  useEffect(() => {
+    if (skipReveal.current) {
+      skipReveal.current = false;
+      return;
+    }
+    if (!selected || !rootId || visibleIds.size === 0 || !nodeMap.has(selected)) return;
+    if (visibleIds.has(selected)) return;
+    if (upstreamTrail.includes(selected)) return;
+    if (siblingAlternatives.some((item) => item.id === selected)) return;
+
+    const visibleGroup = (nodeId: string) => groupIdForMember(nodeId, groupNodes, visibleIds);
+
+    const path = pathFromVisible(selected, visibleIds, groupNodes, adjacency, nodeMap);
+    if (!path) {
+      if (!initialRootId && rootId !== selected) {
+        onRootChange?.(selected);
+        setRootId(selected);
+      }
+      return;
+    }
+
+    const vis = new Set(visibleIds);
+    const parents = new Map(treeParents);
+    const children = new Map(treeChildren);
+    const groups = new Map(groupNodes);
+    const open = new Set(openSet);
+
+    const anchorGroup = visibleGroup(path[0]);
+    if (anchorGroup) pullGroupMember(anchorGroup, path[0], vis, parents, children, groups, open, rootId);
+
+    for (let index = 0; index < path.length - 1; index += 1) {
+      const parentId = path[index];
+      const childId = path[index + 1];
+      if (!vis.has(parentId) || vis.has(childId)) continue;
+      vis.add(childId);
+      parents.set(childId, parentId);
+      const kids = [...(children.get(parentId) || [])];
+      kids.push(childId);
+      children.set(parentId, kids);
+      open.add(parentId);
+    }
+
+    if (!vis.has(selected)) return;
+    setVisibleIds(vis);
+    setTreeParents(parents);
+    setTreeChildren(children);
+    setGroupNodes(groups);
+    setOpenSet(open);
+    setCrossLinks([]);
+  }, [
+    selected,
+    rootId,
+    initialRootId,
+    visibleIds,
+    treeParents,
+    treeChildren,
+    groupNodes,
+    openSet,
+    adjacency,
+    nodeMap,
+    onRootChange,
+    upstreamTrail,
+    siblingAlternatives,
+  ]);
 
   // Stable Directional Tree Layout (Anchored Root, Zero Vertical Shift on Expand)
   const treeNodes = useMemo(() => {
@@ -525,10 +598,8 @@ export function RadialWebGraph({
   // Click Handler (Expand, Collapse, Group, Cross-Links)
   const handleNodeClick = useCallback(
     (node: WebNode) => {
-      // 1. Always select the node for the inspector
-      onSelect(node.id);
-
-      // 2. Group Node Click: Expand up to 8 members
+      // Group ids are not records. Expanding one must not become the selection,
+      // or spotlight dims the whole web and the inspector has nothing to show.
       if (node.isGroup && node.groupMembers) {
         pushHistory();
         const pId = node.parentId || rootId;
@@ -577,6 +648,8 @@ export function RadialWebGraph({
         setGroupNodes(newGroups);
         return;
       }
+
+      onSelect(node.id);
 
       // 3. Already Open Node: Collapse descendants (root stays open)
       if (openSet.has(node.id) && !node.isRoot) {
@@ -763,22 +836,72 @@ export function RadialWebGraph({
 
   const posMap = animPositions;
 
-  // Spotlight active trail: from root down to selected node, plus immediate children
+  // Spotlight trail along the expanded tree. Null means "do not dim":
+  // the selection is missing from this view, so graying every node would hide the web.
   const activeTrail = useMemo(() => {
-    if (!selected) return new Set<string>();
+    if (!selected || !spotlightMode || !visibleIds.has(selected)) return null;
     const trail = new Set<string>();
+    const seen = new Set<string>();
     let cur: string | null = selected;
-    while (cur) {
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
       trail.add(cur);
       cur = treeParents.get(cur) || null;
     }
-    const kids = treeChildren.get(selected) || [];
-    for (const k of kids) trail.add(k);
+    for (const kid of treeChildren.get(selected) || []) {
+      if (visibleIds.has(kid)) trail.add(kid);
+    }
     return trail;
-  }, [selected, treeParents, treeChildren]);
+  }, [selected, spotlightMode, visibleIds, treeParents, treeChildren]);
 
-  // Stable, Calm Camera Framing: keeps root anchored on the left without jarring whip-pans
+  const centerView = useCallback(() => {
+    if (treeNodes.length === 0) {
+      heldSelection.current = selected;
+      setCamera({ x: 0, y: 0, k: 1 });
+      return;
+    }
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const node of treeNodes) {
+      minX = Math.min(minX, node.x - 20);
+      maxX = Math.max(maxX, node.x + 150);
+      minY = Math.min(minY, node.y - 22);
+      maxY = Math.max(maxY, node.y + 22);
+    }
+    for (const node of upstreamNodes) {
+      minX = Math.min(minX, node.x - 24);
+      maxX = Math.max(maxX, node.x + 160);
+      minY = Math.min(minY, node.y - 28);
+      maxY = Math.max(maxY, node.y + 22);
+    }
+    const pad = 28;
+    const top = 132;
+    const right = 400;
+    const bottom = siblingAlternatives.length > 0 ? 128 : pad;
+    const availW = Math.max(220, dimensions.w - right - pad * 2);
+    const availH = Math.max(220, dimensions.h - top - bottom);
+    const contentW = Math.max(48, maxX - minX);
+    const contentH = Math.max(48, maxY - minY);
+    const k = Math.min(1.35, availW / contentW, availH / contentH);
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+    const visibleCenterX = pad + availW / 2;
+    const visibleCenterY = top + availH / 2;
+    heldSelection.current = selected;
+    setCamera({
+      k,
+      x: visibleCenterX - dimensions.w / 2 - midX * k,
+      y: visibleCenterY - dimensions.h / 2 - midY * k,
+    });
+  }, [treeNodes, upstreamNodes, siblingAlternatives.length, dimensions.w, dimensions.h, selected]);
+
+  // Stable, Calm Camera Framing: keeps root anchored on the left without jarring whip-pans.
+  // A Center click holds this camera until the selection changes.
   useEffect(() => {
+    if (heldSelection.current !== undefined && heldSelection.current === selected) return;
+    heldSelection.current = undefined;
     if (isPanning.current) return;
 
     // Anchor root at 250px from stage left if upstream origin exists, else 130px
@@ -798,7 +921,7 @@ export function RadialWebGraph({
       if (Math.abs(c.x - targetCamX) < 4 && Math.abs(c.y) < 4) return c;
       return { ...c, x: targetCamX, y: 0 };
     });
-  }, [treeNodes, upstreamTrail.length, dimensions.w, camera.k]);
+  }, [treeNodes, upstreamTrail.length, dimensions.w, camera.k, selected]);
 
   const maxDepth = useMemo(() => {
     let m = 0;
@@ -844,10 +967,14 @@ export function RadialWebGraph({
         const factor = e.deltaY < 0 ? 1.05 : 0.95;
         setCamera((c) => ({
           ...c,
-          k: Math.max(0.4, Math.min(2.0, Number((c.k * factor).toFixed(3)))),
+          k: Math.max(0.12, Math.min(2.0, Number((c.k * factor).toFixed(3)))),
         }));
       }}
     >
+      <button className="center-view" onClick={centerView} title="Center and show every node">
+        Center
+      </button>
+
       {/* Floating Toolbar: Back Button & Depth Indicator */}
       <div className="radial-web-toolbar">
         <button
@@ -1065,17 +1192,21 @@ export function RadialWebGraph({
               const isDashed = n.isGroup || edgeType === "POTENTIALLY_SUPPORTS";
 
               const isSpawning = spawningIds.has(n.id);
+              const onTrail = Boolean(activeTrail?.has(n.parentId!) && activeTrail.has(n.id));
+              const isEdgeInFocus = !activeTrail || onTrail;
               const strokeColor = isContradiction
                 ? "#FA6610"
                 : isSupports
                 ? "#10B981"
-                : isSelected || isHovered
+                : isSelected || isHovered || onTrail
                 ? "#0D0D0C"
                 : "rgba(13, 13, 12, 0.24)";
 
-              const strokeW = isSelected || isHovered ? 2.2 : isContradiction || isSupports ? 1.8 : 1.3;
+              const strokeW = isSelected || isHovered || onTrail ? 2.2 : isContradiction || isSupports ? 1.8 : 1.3;
               const edgeOpacity = isSpawning
                 ? 0
+                : !isEdgeInFocus
+                ? 0.16
                 : isSelected || isHovered
                 ? 1.0
                 : isContradiction || isSupports
@@ -1141,6 +1272,8 @@ export function RadialWebGraph({
             const color = getNodeColor(n.type);
             const r = n.isRoot ? 11.5 : 8;
 
+            // Missing selections do not dim the web. A real trail dims everything off the path.
+            const isNodeInFocus = !activeTrail || activeTrail.has(n.id);
             // Fill node on hover, unfill when not hovered
             const isFilled = isHovered;
             const fill = isFilled ? color : "#FFFFFF";
@@ -1156,7 +1289,7 @@ export function RadialWebGraph({
                 className="radial-node-group"
                 style={{
                   transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`,
-                  opacity: isSpawning ? 0 : 1,
+                  opacity: isSpawning ? 0 : isNodeInFocus ? 1 : 0.22,
                   transition: isSpawning
                     ? "none"
                     : "transform 260ms cubic-bezier(0.23, 1, 0.32, 1), opacity 200ms cubic-bezier(0.23, 1, 0.32, 1)",
@@ -1252,6 +1385,102 @@ export function RadialWebGraph({
       )}
     </div>
   );
+}
+
+function groupIdForMember(
+  nodeId: string,
+  groups: Map<string, { members?: { id: string }[] }>,
+  visible: Set<string>
+): string | null {
+  for (const [groupId, group] of groups) {
+    if (!visible.has(groupId)) continue;
+    if (group.members?.some((member) => member.id === nodeId)) return groupId;
+  }
+  return null;
+}
+
+function pathFromVisible(
+  target: string,
+  visible: Set<string>,
+  groups: Map<string, { members?: { id: string }[] }>,
+  adjacency: Map<string, Set<string>>,
+  nodeMap: Map<string, GraphNode>
+): string[] | null {
+  if (visible.has(target) || groupIdForMember(target, groups, visible)) return [target];
+
+  const previous = new Map<string, string>();
+  const queue = [target];
+  const seen = new Set<string>([target]);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const next of adjacency.get(current) || []) {
+      if (seen.has(next) || !nodeMap.has(next)) continue;
+      seen.add(next);
+      previous.set(next, current);
+      if (visible.has(next) || groupIdForMember(next, groups, visible)) {
+        const path = [next];
+        let cursor = next;
+        while (cursor !== target) {
+          const step = previous.get(cursor);
+          if (!step) return null;
+          path.push(step);
+          cursor = step;
+        }
+        return path;
+      }
+      queue.push(next);
+    }
+  }
+  return null;
+}
+
+function pullGroupMember(
+  groupId: string,
+  memberId: string,
+  vis: Set<string>,
+  parents: Map<string, string>,
+  children: Map<string, string[]>,
+  groups: Map<string, any>,
+  open: Set<string>,
+  rootId: string
+) {
+  const group = groups.get(groupId);
+  if (!group) return;
+  const parentId = group.parentId || rootId;
+  const remaining = ((group.members || []) as GraphNode[]).filter((member) => member.id !== memberId);
+  const kids = [...(children.get(parentId) || [])].filter((kid) => kid !== groupId);
+
+  vis.delete(groupId);
+  parents.delete(groupId);
+  groups.delete(groupId);
+
+  if (!vis.has(memberId)) {
+    vis.add(memberId);
+    parents.set(memberId, parentId);
+    kids.push(memberId);
+  }
+
+  if (remaining.length > 3) {
+    groups.set(groupId, {
+      ...group,
+      members: remaining,
+      count: remaining.length,
+      label: `${remaining.length} ${pluralize(group.type || "")}`,
+    });
+    vis.add(groupId);
+    parents.set(groupId, parentId);
+    kids.push(groupId);
+  } else {
+    for (const item of remaining) {
+      if (vis.has(item.id)) continue;
+      vis.add(item.id);
+      parents.set(item.id, parentId);
+      kids.push(item.id);
+    }
+  }
+
+  children.set(parentId, kids);
+  open.add(parentId);
 }
 
 function pluralize(type: string): string {

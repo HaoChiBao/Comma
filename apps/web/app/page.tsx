@@ -114,10 +114,16 @@ export default function HomePage() {
     return graph?.edges || [];
   }, [focus, caseEdges, activeNodes, graph?.edges]);
 
-  const currentNode = activeNodes.find((item) => item.id === selected) || null;
+  const currentNode =
+    activeNodes.find((item) => item.id === selected) ||
+    graph?.nodes.find((item) => item.id === selected) ||
+    null;
+  const inspectorNodes =
+    currentNode && !activeNodes.some((item) => item.id === currentNode.id) ? graph?.nodes || activeNodes : activeNodes;
+  const inspectorEdges = inspectorNodes === activeNodes ? activeEdges : graph?.edges || activeEdges;
   const nodeSummary = useNodeSummary(currentNode?.id || null, actorId, asOf, mode, organizationId);
   const focusedCase = (graph?.cases || []).find((item) => item.id === focus) || null;
-  const links = currentNode ? linkedRecords(currentNode, activeNodes, activeEdges) : [];
+  const links = currentNode ? linkedRecords(currentNode, inspectorNodes, inspectorEdges) : [];
   const gap = currentNode ? amountGap(currentNode.amount, links.filter((item) => item.edge.type === "CONTRADICTS").map((item) => item.node?.amount)) : null;
   const timeline = currentNode ? datedRecords(currentNode, links.flatMap((item) => (item.node ? [item.node] : []))) : [];
 
@@ -126,6 +132,12 @@ export default function HomePage() {
       setSelected(null);
       return;
     }
+    const inView = activeNodes.some((item) => item.id === nodeId);
+    const record = inView
+      ? activeNodes.find((item) => item.id === nodeId) || null
+      : graph?.nodes.find((item) => item.id === nodeId) || null;
+    if (!record) return;
+    if (!inView && focus) setFocus(null);
     setSelected(nodeId);
     setInspectorOpen(true);
   }
@@ -322,7 +334,7 @@ export default function HomePage() {
                 <NodeSummary
                   summary={nodeSummary.summary}
                   error={nodeSummary.error}
-                  nodes={activeNodes}
+                  nodes={inspectorNodes}
                   onOpen={openSummaryNode}
                 />
               </div>
@@ -483,8 +495,10 @@ export default function HomePage() {
                   key={doc.version_id}
                   className="doc-result-btn"
                   onClick={() => {
-                    const match = activeNodes.find((n) => n.version_id === doc.version_id || n.label === doc.id);
-                    if (match) setSelected(match.id);
+                    const match =
+                      activeNodes.find((n) => n.version_id === doc.version_id || n.label === doc.id) ||
+                      graph?.nodes.find((n) => n.version_id === doc.version_id || n.label === doc.id);
+                    if (match) handleSelectNode(match.id);
                     setPreviewId(doc.version_id);
                   }}
                 >

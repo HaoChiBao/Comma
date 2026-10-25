@@ -322,11 +322,34 @@ export function ObsidianGraph({
   const handleResetView = () => {
     const el = frame.current;
     if (!el) return;
-    camera.current.x = el.clientWidth / 2;
-    camera.current.y = el.clientHeight / 2;
-    camera.current.k = el.clientWidth < 900 ? 0.85 : 1.05;
-    camera.current.rotX = 0.22;
-    simAlpha.current = Math.max(simAlpha.current, 0.45);
+    aim.current = null;
+    const rotY = 0;
+    const rotX = 0.22;
+    const cosY = Math.cos(rotY);
+    const sinY = Math.sin(rotY);
+    const cosX = Math.cos(rotX);
+    const sinX = Math.sin(rotX);
+    const focal = 800;
+    let maxX = 40;
+    let maxY = 40;
+    for (const node of bodies.current) {
+      const x1 = node.x * cosY + node.z * sinY;
+      const z1 = -node.x * sinY + node.z * cosY;
+      const y2 = node.y * cosX - z1 * sinX;
+      const z2 = node.y * sinX + z1 * cosX;
+      const scale = focal / (focal + z2);
+      const pad = (node.r + 22) * scale;
+      maxX = Math.max(maxX, Math.abs(x1) * scale + pad);
+      maxY = Math.max(maxY, Math.abs(y2) * scale + pad);
+    }
+    const width = el.clientWidth;
+    const height = el.clientHeight;
+    const fit = Math.min((width - 96) / (2 * maxX), (height - 96) / (2 * maxY));
+    camera.current.rotY = rotY;
+    camera.current.rotX = rotX;
+    camera.current.k = Math.max(0.2, Math.min(2.2, fit));
+    camera.current.x = width / 2;
+    camera.current.y = height / 2;
   };
 
   return (
@@ -427,9 +450,11 @@ export function ObsidianGraph({
 
       {/* Floating Canvas Controls */}
       <div className="canvas-zoom-controls">
+        <button className="center-view" onClick={handleResetView} title="Center and show every node">
+          Center
+        </button>
         <button onClick={() => handleZoom(1.2)} title="Zoom in">+</button>
         <button onClick={() => handleZoom(0.8)} title="Zoom out">−</button>
-        <button onClick={handleResetView} title="Reset 3D view">⛶</button>
       </div>
     </div>
   );
@@ -605,7 +630,8 @@ function paint3DAtomGraph(
 ) {
   ctx.clearRect(0, 0, width, height);
 
-  const activeId = hoverId || selectedId;
+  const selectedInView = Boolean(selectedId && nodes.some((node) => node.id === selectedId));
+  const activeId = hoverId || (selectedInView ? selectedId : null);
   const nearSet = new Set<string>();
   if (activeId) {
     nearSet.add(activeId);
