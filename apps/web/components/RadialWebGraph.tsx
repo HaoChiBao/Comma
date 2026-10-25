@@ -52,6 +52,35 @@ function getNodeColor(type: string): string {
   return TYPE_COLORS[norm] || TYPE_COLORS.DEFAULT;
 }
 
+function getDistinctNeighbors(
+  nodeId: string,
+  adjacency: Map<string, Set<string>>,
+  nodeMap: Map<string, GraphNode>,
+  visibleIds?: Set<string>
+): GraphNode[] {
+  const currentLabel = nodeMap.get(nodeId)?.label || nodeId;
+  const rawNeighbors = Array.from(adjacency.get(nodeId) || []).filter((id) => id !== nodeId);
+  const byLabel = new Map<string, GraphNode>();
+
+  for (const nid of rawNeighbors) {
+    if (visibleIds && visibleIds.has(nid)) continue;
+    const item = nodeMap.get(nid);
+    if (!item) continue;
+    // Disallow linking to self or mirror records with same label
+    if (item.label === currentLabel) continue;
+
+    const existing = byLabel.get(item.label);
+    if (!existing) {
+      byLabel.set(item.label, item);
+    } else if (item.id.startsWith("artifact:") && !existing.id.startsWith("artifact:")) {
+      // Prefer canonical artifact document over mirror entity
+      byLabel.set(item.label, item);
+    }
+  }
+
+  return Array.from(byLabel.values());
+}
+
 export function RadialWebGraph({
   nodes,
   edges,
@@ -205,7 +234,7 @@ export function RadialWebGraph({
   const handleResetToRoot = useCallback(() => {
     if (!rootId) return;
     pushHistory();
-    const neighbors = Array.from(adjacency.get(rootId) || []).filter((id) => id !== rootId);
+    const distinctNeighbors = getDistinctNeighbors(rootId, adjacency, nodeMap);
 
     const newVisible = new Set<string>([rootId]);
     const newParents = new Map<string, string>();
@@ -214,9 +243,7 @@ export function RadialWebGraph({
     const newOpen = new Set<string>([rootId]);
 
     const byType = new Map<string, GraphNode[]>();
-    for (const nid of neighbors) {
-      const node = nodeMap.get(nid);
-      if (!node) continue;
+    for (const node of distinctNeighbors) {
       const t = node.type || "OTHER";
       const list = byType.get(t) || [];
       list.push(node);
@@ -261,7 +288,7 @@ export function RadialWebGraph({
   useEffect(() => {
     if (!rootId || !nodeMap.has(rootId)) return;
 
-    const neighbors = Array.from(adjacency.get(rootId) || []).filter((id) => id !== rootId);
+    const distinctNeighbors = getDistinctNeighbors(rootId, adjacency, nodeMap);
     const newVisible = new Set<string>([rootId]);
     const newParents = new Map<string, string>();
     const newChildren = new Map<string, string[]>();
@@ -269,9 +296,7 @@ export function RadialWebGraph({
     const newOpen = new Set<string>([rootId]);
 
     const byType = new Map<string, GraphNode[]>();
-    for (const nid of neighbors) {
-      const node = nodeMap.get(nid);
-      if (!node) continue;
+    for (const node of distinctNeighbors) {
       const t = node.type || "OTHER";
       const list = byType.get(t) || [];
       list.push(node);
@@ -473,14 +498,14 @@ export function RadialWebGraph({
         return;
       }
 
-      // 4. Unopened Node: Check neighbors
-      const allNeighbors = Array.from(adjacency.get(node.id) || []).filter((id) => id !== node.id);
-      const newNeighbors = allNeighbors.filter((nid) => !visibleIds.has(nid));
+      // 4. Unopened Node: Check distinct neighbors
+      const distinctNeighbors = getDistinctNeighbors(node.id, adjacency, nodeMap, visibleIds);
 
-      // 5. If all neighbors already on screen: draw cross-links and show toast
-      if (newNeighbors.length === 0) {
-        if (allNeighbors.length > 0) {
-          setCrossLinks(allNeighbors.map((target) => ({ from: node.id, to: target })));
+      // 5. If all distinct neighbors already on screen: draw cross-links and show toast
+      if (distinctNeighbors.length === 0) {
+        const rawLinked = Array.from(adjacency.get(node.id) || []).filter((id) => id !== node.id && visibleIds.has(id));
+        if (rawLinked.length > 0) {
+          setCrossLinks(rawLinked.map((target) => ({ from: node.id, to: target })));
           setToast(`Everything linked to ${node.label} is already on screen.`);
           setTimeout(() => setToast(null), 2800);
         } else {
@@ -493,9 +518,7 @@ export function RadialWebGraph({
       // 6. Expand New Neighbors (Flow to the Right)
       pushHistory();
       const byType = new Map<string, GraphNode[]>();
-      for (const nid of newNeighbors) {
-        const item = nodeMap.get(nid);
-        if (!item) continue;
+      for (const item of distinctNeighbors) {
         const t = item.type || "OTHER";
         const list = byType.get(t) || [];
         list.push(item);
