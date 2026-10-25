@@ -195,6 +195,66 @@ export function RadialWebGraph({
     historyStack.current = [snap, ...historyStack.current].slice(0, 40);
   }, [visibleIds, openSet, selected, treeParents, treeChildren, groupNodes, rootId, upstreamTrail]);
 
+  // Atomic Flow Initializer (Synchronizes visibleIds, treeParents, treeChildren without intermediate lag)
+  const initializeFlowForRoot = useCallback(
+    (targetRoot: string, trail: string[]) => {
+      const upstreamLabels = new Set<string>();
+      for (const uid of trail) {
+        const l = nodeMap.get(uid)?.label;
+        if (l) upstreamLabels.add(l);
+      }
+
+      // Exclude upstream ancestors so the path forward strictly points right
+      const distinctNeighbors = getDistinctNeighbors(targetRoot, adjacency, nodeMap, undefined, upstreamLabels);
+      const newVisible = new Set<string>([targetRoot]);
+      const newParents = new Map<string, string>();
+      const newChildren = new Map<string, string[]>();
+      const newGroups = new Map<string, any>();
+      const newOpen = new Set<string>([targetRoot]);
+
+      const byType = new Map<string, GraphNode[]>();
+      for (const node of distinctNeighbors) {
+        const t = node.type || "OTHER";
+        const list = byType.get(t) || [];
+        list.push(node);
+        byType.set(t, list);
+      }
+
+      const rootKids: string[] = [];
+      byType.forEach((items, type) => {
+        if (items.length > 3) {
+          const gid = `group:${targetRoot}:${type}:0`;
+          newGroups.set(gid, {
+            id: gid,
+            type,
+            label: `${items.length} ${pluralize(type)}`,
+            count: items.length,
+            members: items,
+            parentId: targetRoot,
+          });
+          newVisible.add(gid);
+          newParents.set(gid, targetRoot);
+          rootKids.push(gid);
+        } else {
+          for (const item of items) {
+            newVisible.add(item.id);
+            newParents.set(item.id, targetRoot);
+            rootKids.push(item.id);
+          }
+        }
+      });
+
+      newChildren.set(targetRoot, rootKids);
+      setVisibleIds(newVisible);
+      setTreeParents(newParents);
+      setTreeChildren(newChildren);
+      setGroupNodes(newGroups);
+      setOpenSet(newOpen);
+      setCrossLinks([]);
+    },
+    [adjacency, nodeMap]
+  );
+
   // Handle Root Change & Maintain Flow Lineage
   const changeRoot = useCallback(
     (newRoot: string) => {
@@ -203,24 +263,23 @@ export function RadialWebGraph({
 
       pushHistory();
 
-      setUpstreamTrail((prevTrail) => {
-        const idx = prevTrail.indexOf(newRoot);
-        if (idx !== -1) {
-          // Navigating backward along the trail
-          return prevTrail.slice(0, idx);
-        }
-        // If moving forward from the current root:
-        if (rootId) {
-          return [...prevTrail, rootId];
-        }
-        return [];
-      });
+      let nextTrail = upstreamTrail;
+      const idx = upstreamTrail.indexOf(newRoot);
+      if (idx !== -1) {
+        nextTrail = upstreamTrail.slice(0, idx);
+      } else if (rootId) {
+        nextTrail = [...upstreamTrail, rootId];
+      } else {
+        nextTrail = [];
+      }
 
+      setUpstreamTrail(nextTrail);
       setRootId(newRoot);
+      initializeFlowForRoot(newRoot, nextTrail);
       onSelect(newRoot);
       onRootChange?.(newRoot);
     },
-    [rootId, nodeMap, onSelect, onRootChange, pushHistory]
+    [rootId, nodeMap, upstreamTrail, initializeFlowForRoot, onSelect, onRootChange, pushHistory]
   );
 
   // Synchronize initialRootId prop from parent
@@ -367,61 +426,8 @@ export function RadialWebGraph({
   // Populate Forward Flow when rootId or upstreamTrail changes
   useEffect(() => {
     if (!rootId || !nodeMap.has(rootId)) return;
-
-    const upstreamLabels = new Set<string>();
-    for (const uid of upstreamTrail) {
-      const l = nodeMap.get(uid)?.label;
-      if (l) upstreamLabels.add(l);
-    }
-
-    // Exclude upstream ancestors so the path forward strictly points right
-    const distinctNeighbors = getDistinctNeighbors(rootId, adjacency, nodeMap, undefined, upstreamLabels);
-    const newVisible = new Set<string>([rootId]);
-    const newParents = new Map<string, string>();
-    const newChildren = new Map<string, string[]>();
-    const newGroups = new Map<string, any>();
-    const newOpen = new Set<string>([rootId]);
-
-    const byType = new Map<string, GraphNode[]>();
-    for (const node of distinctNeighbors) {
-      const t = node.type || "OTHER";
-      const list = byType.get(t) || [];
-      list.push(node);
-      byType.set(t, list);
-    }
-
-    const rootKids: string[] = [];
-    byType.forEach((items, type) => {
-      if (items.length > 3) {
-        const gid = `group:${rootId}:${type}:0`;
-        newGroups.set(gid, {
-          id: gid,
-          type,
-          label: `${items.length} ${pluralize(type)}`,
-          count: items.length,
-          members: items,
-          parentId: rootId,
-        });
-        newVisible.add(gid);
-        newParents.set(gid, rootId);
-        rootKids.push(gid);
-      } else {
-        for (const item of items) {
-          newVisible.add(item.id);
-          newParents.set(item.id, rootId);
-          rootKids.push(item.id);
-        }
-      }
-    });
-
-    newChildren.set(rootId, rootKids);
-    setVisibleIds(newVisible);
-    setTreeParents(newParents);
-    setTreeChildren(newChildren);
-    setGroupNodes(newGroups);
-    setOpenSet(newOpen);
-    setCrossLinks([]);
-  }, [rootId, upstreamTrail, adjacency, nodeMap]);
+    initializeFlowForRoot(rootId, upstreamTrail);
+  }, [rootId, upstreamTrail, initializeFlowForRoot]);
 
   // Stable Directional Tree Layout (Anchored Root, Zero Vertical Shift on Expand)
   const treeNodes = useMemo(() => {
@@ -485,7 +491,8 @@ export function RadialWebGraph({
 
     const result: WebNode[] = [];
     for (const id of Array.from(visibleIds)) {
-      const pt = coords.get(id) || { x: 0, y: 0 };
+      const pt = coords.get(id);
+      if (!pt) continue; // Skip orphaned/unpositioned nodes so they NEVER pile up at (0, 0)!
       const isRoot = id === rootId;
       const d = Math.round(pt.x / COLUMN_GAP);
 
@@ -998,14 +1005,15 @@ export function RadialWebGraph({
                   opacity={0.6}
                 />
 
-                {/* Node Circle */}
+                {/* Node Circle (Fills on hover, unfills when not hovered) */}
                 <circle
                   r={10}
-                  fill="#FFFFFF"
+                  fill={isHovered ? color : "#FFFFFF"}
                   stroke={isSelected || isHovered ? "#0D0D0C" : color}
                   strokeWidth={isSelected ? 2.5 : 2}
+                  style={{ transition: "fill 140ms ease, stroke 140ms ease" }}
                 />
-                <circle r={3} fill={color} />
+                {!isHovered && <circle r={3} fill={color} pointerEvents="none" />}
 
                 {/* Label */}
                 <text
@@ -1133,10 +1141,11 @@ export function RadialWebGraph({
             const color = getNodeColor(n.type);
             const r = n.isRoot ? 11.5 : 8;
 
-            const isFilled = n.isRoot || n.isOpen;
+            // Fill node on hover, unfill when not hovered
+            const isFilled = isHovered;
             const fill = isFilled ? color : "#FFFFFF";
-            const stroke = isSelected || isHovered ? "#0D0D0C" : color;
-            const strokeWidth = isSelected ? 2.5 : isHovered ? 2.0 : isFilled ? 1.5 : 2.0;
+            const stroke = isHovered ? "#0D0D0C" : isSelected ? "#0D0D0C" : color;
+            const strokeWidth = isSelected ? 2.5 : isHovered ? 2.2 : 1.8;
 
             const labelX = r + 8;
             const labelY = 3.5;
@@ -1174,9 +1183,9 @@ export function RadialWebGraph({
                 {/* Group Node: 3 Offset Hollow Circles */}
                 {n.isGroup ? (
                   <g className="group-circles">
-                    <circle cx={-3} cy={-2} r={r} fill="#FFFFFF" stroke={color} strokeWidth={1.6} />
-                    <circle cx={0} cy={0} r={r} fill="#FFFFFF" stroke={color} strokeWidth={1.6} />
-                    <circle cx={3} cy={2} r={r} fill="#FFFFFF" stroke="#0D0D0C" strokeWidth={1.6} />
+                    <circle cx={-3} cy={-2} r={r} fill={isHovered ? color : "#FFFFFF"} stroke={color} strokeWidth={1.6} style={{ transition: "fill 140ms ease" }} />
+                    <circle cx={0} cy={0} r={r} fill={isHovered ? color : "#FFFFFF"} stroke={color} strokeWidth={1.6} style={{ transition: "fill 140ms ease" }} />
+                    <circle cx={3} cy={2} r={r} fill={isHovered ? color : "#FFFFFF"} stroke={isHovered ? "#0D0D0C" : color} strokeWidth={1.6} style={{ transition: "fill 140ms ease" }} />
                   </g>
                 ) : (
                   /* Standard Node Circle */
@@ -1185,12 +1194,13 @@ export function RadialWebGraph({
                     fill={fill}
                     stroke={stroke}
                     strokeWidth={strokeWidth}
+                    style={{ transition: "fill 140ms ease, stroke 140ms ease" }}
                   />
                 )}
 
-                {/* Inner Dot for Opened Nodes if hollow */}
+                {/* Inner Dot for Unfilled Nodes */}
                 {!isFilled && !n.isGroup && (
-                  <circle r={2.5} fill={color} />
+                  <circle r={n.isRoot ? 3.5 : 2.5} fill={color} pointerEvents="none" />
                 )}
 
                 {/* High Contrast Crisp Label */}
@@ -1200,7 +1210,7 @@ export function RadialWebGraph({
                   textAnchor="start"
                   className="radial-node-label"
                   fill="#0D0D0C"
-                  fontWeight={isSelected ? 700 : n.isRoot ? 600 : 500}
+                  fontWeight={isSelected || isHovered ? 700 : n.isRoot ? 600 : 500}
                   fontSize={n.isRoot ? 12 : 11.5}
                   fontFamily="'Saans', -apple-system, BlinkMacSystemFont, sans-serif"
                 >
