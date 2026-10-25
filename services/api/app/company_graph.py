@@ -5,7 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.graph import KIND_NODE
-from app.models import Actor, ArtifactVersion, Case, GraphEdge, IngestJob, IngestRecord, IngestStep, SourceArtifact
+from app.models import Actor, ArtifactVersion, Case, GraphEdge, IngestJob, IngestStep, SourceArtifact
+from app.relationships import find_relationships, load_records, merge_edges
 from app.snapshots import AccessError, get_actor
 from app.temporal import exclusion_reason, money
 
@@ -63,6 +64,8 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
     node_ids = {node["id"] for node in nodes}
     edges = []
     for edge in db.scalars(select(GraphEdge)).all():
+        if edge.id.startswith("ge-"):
+            continue
         if edge.from_node_id in node_ids and edge.to_node_id in node_ids:
             edges.append(
                 {
@@ -75,7 +78,9 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
                     "confidence": edge.confidence,
                 }
             )
-    edges.extend(_mentions(db, versions, node_ids, edges))
+    hidden = {node["id"] for node in nodes if node["redacted"]}
+    visible = [version for version in versions if f"artifact:{version.id}" in node_ids and f"artifact:{version.id}" not in hidden]
+    merge_edges(edges, find_relationships(load_records(db, visible)))
     return {
         "organization_id": organization_id,
         "as_of": as_of.isoformat(),
@@ -101,40 +106,6 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
         "corpus": {"documents": len(versions), "visible": len(documents), "on_graph": linked},
         "run": _run(db, organization_id),
     }
-
-
-def _mentions(db: Session, versions: list[ArtifactVersion], node_ids: set[str], edges: list[dict]) -> list[dict]:
-    by_external = {version.artifact.external_id: f"artifact:{version.id}" for version in versions}
-    version_ids = {version.id for version in versions}
-    linked = {frozenset((edge["source"], edge["target"])) for edge in edges}
-    mentions = []
-    records = db.scalars(select(IngestRecord)).all()
-    for record in records:
-        if record.version_id not in version_ids:
-            continue
-        source = by_external.get(record.external_id)
-        if source not in node_ids:
-            continue
-        for ref in record.references_json or []:
-            target = by_external.get(ref)
-            if not target or target == source or target not in node_ids:
-                continue
-            pair = frozenset((source, target))
-            if pair in linked:
-                continue
-            linked.add(pair)
-            mentions.append(
-                {
-                    "id": f"mn-{record.external_id}-{ref}"[:80],
-                    "source": source,
-                    "target": target,
-                    "type": "MENTIONS",
-                    "inferred": True,
-                    "explanation": "This document names the other record. That does not prove it was used.",
-                    "confidence": "medium",
-                }
-            )
-    return mentions
 
 
 def _document(version: ArtifactVersion, case_ids: list[str], on_graph: bool) -> dict:

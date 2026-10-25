@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Actor, Fact, GraphEdge
+from app.relationships import find_relationships, load_records, merge_edges
 from app.snapshots import AccessError, get_actor, get_case, guarded_version, load_version, require_snapshot
 from app.temporal import interval_contains, money
 
@@ -96,8 +97,11 @@ def project_graph(db: Session, snapshot_id: str, view: str) -> dict:
             )
     node_ids = {node["id"] for node in nodes}
     for edge in db.scalars(select(GraphEdge)).all():
+        if edge.id.startswith("ge-"):
+            continue
         if edge.from_node_id in node_ids and edge.to_node_id in node_ids:
             edges.append(_edge(edge))
+    merge_edges(edges, find_relationships(load_records(db, visible_versions)))
     for version in visible_versions:
         if version.artifact.kind != "policy":
             continue

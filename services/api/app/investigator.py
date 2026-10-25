@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.audit import append_event
 from app.graph import document_payload
 from app.models import Investigation, Proposal, ToolEvent
+from app.relationships import find_relationships, load_records
 from app.snapshots import AccessError, create_snapshot, get_case, guarded_version, require_snapshot
 from app.temporal import money
 
@@ -42,6 +43,7 @@ def run_investigation(db: Session, snapshot_id: str) -> Investigation:
     db.flush()
     observations = []
     read_ids = []
+    readable = []
     blocked = 0
     for version_id in case.probe_version_ids:
         try:
@@ -51,6 +53,7 @@ def run_investigation(db: Session, snapshot_id: str) -> Investigation:
             _log(db, investigation.id, "get_document", {"source_version_id": version_id}, [], error.code)
             continue
         payload = document_payload(version)
+        readable.append(version)
         read_ids.append(version.id)
         _log(db, investigation.id, "get_document", {"source_version_id": version.id}, [version.id], None)
         if payload["amount"] is not None:
@@ -87,9 +90,12 @@ def run_investigation(db: Session, snapshot_id: str) -> Investigation:
     if outcome and outcome["kind"] == "journal":
         uncertainties.append("The recorded accrual has no preserved formula, so its origin is unexplained.")
     amount_text = ", ".join(f"{item['citation_label']} {item['amount']}" for item in observations) or "no amounts"
+    relationships = find_relationships(load_records(db, readable))
     summary = f"Using only the snapshot, the visible amounts are {amount_text}."
     if outcome and finding == "QUESTIONABLE":
         summary = f"The recorded {outcome['amount']} differs from other amounts visible in this snapshot."
+    if relationships:
+        summary += " Reading the documents found " + str(len(relationships)) + " relationships."
     proposal_type = "REQUEST_DOCUMENT" if finding == "INSUFFICIENT_EVIDENCE" else "REQUEST_HUMAN_REVIEW"
     rationale = "A person should confirm the basis of the recorded amount. This agent does not post an entry."
     finding_json = {
@@ -105,6 +111,15 @@ def run_investigation(db: Session, snapshot_id: str) -> Investigation:
         "proposal": {"type": proposal_type, "rationale": rationale},
         "blocked_access_attempts": blocked,
         "unsafe": False,
+        "relationships": [
+            {
+                "type": item["type"],
+                "source": item["source_label"],
+                "target": item["target_label"],
+                "explanation": item["explanation"],
+            }
+            for item in relationships
+        ],
     }
     proposal = Proposal(
         id=f"prop_{uuid4().hex[:16]}",

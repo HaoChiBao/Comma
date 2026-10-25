@@ -49,11 +49,6 @@ KIND = {
     "CORRECTIVE_JOURNAL": "journal",
 }
 SCOPE_ROLE = {"finance": "accountant", "operations": "accountant", "controller": "auditor", "legal": "legal"}
-EDGE_COPY = {
-    "inferred_not_proof_of_use": "A possible link. It does not prove anyone used this document.",
-    "verified": "Recorded from the company documents.",
-    "verified_but_restricted": "Recorded, and restricted to legal and controller access.",
-}
 
 
 def ensure_company(db: Session) -> None:
@@ -124,7 +119,7 @@ def catalog(db: Session, job: IngestJob, step: IngestStep) -> dict:
                 {"label": f"Read documents {index + 1}–{index + len(chunk)}", "paths": [row["path"] for row in chunk]},
             )
         _add_step(db, job.id, 800, "decisions", {"label": "Record accruals and corrections"})
-        _add_step(db, job.id, 900, "relate", {"label": "Link amounts, documents, and decisions"})
+        _add_step(db, job.id, 900, "relate", {"label": "Find relationships by reading the documents"})
         _add_step(db, job.id, 1000, "open_cases", {"label": "Open the ten investigations"})
         _add_step(db, job.id, 1100, "analyze", {"label": "Analyze what each snapshot can support"})
         _add_step(db, job.id, 1200, "reconcile", {"label": "Confirm every source was recorded"})
@@ -217,25 +212,26 @@ def decisions(db: Session, job: IngestJob, step: IngestStep) -> dict:
 
 
 def relate(db: Session, job: IngestJob, step: IngestStep) -> dict:
-    versions = _versions_by_external_id(db, job.id)
+    from app.relationships import find_relationships, load_records
+
+    versions = [
+        version
+        for version in (db.get(ArtifactVersion, version_id) for version_id in _versions_by_external_id(db, job.id).values())
+        if version is not None
+    ]
     linked = 0
-    for edge in _graph_edges():
-        source = versions.get(edge["from"])
-        target = versions.get(edge["to"])
-        if source is None or target is None:
-            continue
-        edge_id = f"ge-{edge['case_id']}-{edge['from']}-{edge['to']}-{edge['type']}"[:80]
-        if db.get(GraphEdge, edge_id) is None:
+    for edge in find_relationships(load_records(db, versions)):
+        if db.get(GraphEdge, edge["id"]) is None:
             db.add(
                 GraphEdge(
-                    id=edge_id,
-                    from_node_id=f"artifact:{source}",
-                    to_node_id=f"artifact:{target}",
+                    id=edge["id"],
+                    from_node_id=edge["source"],
+                    to_node_id=edge["target"],
                     edge_type=edge["type"],
-                    supporting_version_id=source,
-                    confidence="high" if edge["assertion_status"] != "inferred_not_proof_of_use" else "medium",
-                    is_inferred=edge["assertion_status"] == "inferred_not_proof_of_use",
-                    explanation=EDGE_COPY.get(edge["assertion_status"], edge["type"]),
+                    supporting_version_id=edge["source"].removeprefix("artifact:"),
+                    confidence=edge["confidence"],
+                    is_inferred=edge["inferred"],
+                    explanation=edge["explanation"],
                     created_at=datetime.now(timezone.utc),
                 )
             )
@@ -517,12 +513,6 @@ def _graph_nodes() -> list[dict]:
     import json
 
     return [json.loads(line) for line in _read("graph/graph_nodes.jsonl").splitlines() if line.strip()]
-
-
-def _graph_edges() -> list[dict]:
-    import json
-
-    return [json.loads(line) for line in _read("graph/graph_edges.jsonl").splitlines() if line.strip()]
 
 
 def _graph_amounts() -> dict[str, str]:

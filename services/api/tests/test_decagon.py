@@ -52,6 +52,8 @@ def test_decagon_analysis_hides_the_invoice_until_december():
     assert later["corpus"]["documents"] >= 500
     assert len(later["nodes"]) >= 400
     assert sum(edge["type"] == "MENTIONS" for edge in later["edges"]) >= 20
+    assert any(edge["type"] == "CONTRADICTS" for edge in later["edges"])
+    assert all(not edge["id"].startswith("ge-") for edge in later["edges"])
     legal = api.get(
         "/api/v1/company-graph",
         params={"actor_id": "actor-decagon-legal", "as_of": "2025-09-30T23:59:00+00:00", "mode": "audit", "view": "agent"},
