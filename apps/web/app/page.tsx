@@ -238,6 +238,7 @@ export default function HomePage() {
     setNarrating(false);
     setOpenSuggestionId(null);
     setStreamNodeId(null);
+    setCustomRootId(null);
   }, [actorId, asOf, mode]);
 
   useEffect(() => {

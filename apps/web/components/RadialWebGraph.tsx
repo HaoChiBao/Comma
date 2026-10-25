@@ -481,6 +481,20 @@ export function RadialWebGraph({
     changeRoot(initialRootId);
   }, [initialRootId, rootId, nodeMap, changeRoot]);
 
+  // A new corpus (another actor or organization) must not keep the previous flow.
+  // Those ids are absent from the new map, so their captions fall back to the raw id.
+  useEffect(() => {
+    if (nodes.length === 0 || !rootId || nodeMap.has(rootId)) return;
+    setRootId(null);
+    setVisibleIds(new Set());
+    setOpenSet(new Set());
+    setTreeParents(new Map());
+    setTreeChildren(new Map());
+    setGroupNodes(new Map());
+    setUpstreamTrail([]);
+    setCrossLinks([]);
+  }, [nodes, rootId, nodeMap]);
+
   // Initial Root Determination
   useEffect(() => {
     if (nodes.length === 0 || rootId) return;
