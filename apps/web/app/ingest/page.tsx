@@ -32,7 +32,7 @@ export default function IngestPage() {
     setError("");
     try {
       const response = sample
-        ? await fetch(`${API_URL}/api/v1/ingestions/sample?available_from=${day}`, { method: "POST" })
+        ? await fetch(`${API_URL}/api/v1/ingestions/decagon`, { method: "POST" })
         : await sendFiles();
       const body = await response.json();
       if (!response.ok) throw new Error(body.detail || "Upload failed");
@@ -47,7 +47,7 @@ export default function IngestPage() {
   async function sendFiles() {
     const form = new FormData();
     form.set("available_from", day);
-    form.set("organization_id", "org-acme");
+    form.set("organization_id", "org-decagon");
     Array.from(files || []).forEach((file) => form.append("files", file));
     return fetch(`${API_URL}/api/v1/ingestions`, { method: "POST", body: form });
   }
@@ -77,7 +77,7 @@ export default function IngestPage() {
         </label>
         <input aria-label="Documents" type="file" multiple accept=".txt,.md,.csv,.json,.pdf,.eml" onChange={(event) => setFiles(event.target.files)} />
         <button className="primary" disabled={busy || !files?.length} onClick={() => start(false)}>Start ingestion</button>
-        <button disabled={busy} onClick={() => start(true)}>Run the Cloud Services sample</button>
+        <button disabled={busy} onClick={() => start(true)}>Load the company documents</button>
       </div>
       {error ? <p className="bad">{error}</p> : null}
       {job ? (

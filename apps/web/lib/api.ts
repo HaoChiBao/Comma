@@ -13,6 +13,17 @@ export type CaseRow = {
 
 export type ActorRow = { id: string; name: string; role: string; organization_id?: string };
 
+export type CompanyDocument = {
+  id: string;
+  version_id: string;
+  kind: string;
+  title: string;
+  amount: string | null;
+  available_from: string | null;
+  case_id: string;
+  on_graph: boolean;
+};
+
 export type CompanyNode = GraphNode & { group: string; case_id: string; text: string };
 
 export type CompanyGraph = {
@@ -24,7 +35,8 @@ export type CompanyGraph = {
   nodes: CompanyNode[];
   edges: GraphEdge[];
   cases: { id: string; title: string; vendor: string; finding: string }[];
-  corpus: { documents: number; on_graph: number };
+  documents: CompanyDocument[];
+  corpus: { documents: number; visible: number; on_graph: number };
   run: { id: string; status: string; error: string; completed: number; total: number; label: string } | null;
 };
 

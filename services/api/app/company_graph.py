@@ -37,13 +37,11 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
         ).all()
     )
     nodes = []
+    documents = []
     linked = 0
     for version in versions:
         case_ids = list((version.metadata_json or {}).get("case_ids") or [])
         on_graph = bool(case_ids) or version.artifact.kind == "policy"
-        if not on_graph:
-            continue
-        linked += 1
         reason = exclusion_reason(
             version,
             version.grants,
@@ -54,9 +52,14 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
             hidden_version_ids=hidden,
         )
         if reason is None:
-            nodes.append(_node(version, case_ids, redacted=False))
-        elif view == "auditor" and reason in {"FUTURE_INFORMATION", "INSUFFICIENT_PERMISSION", "NOT_IN_SNAPSHOT"}:
+            documents.append(_document(version, case_ids, on_graph))
+            if on_graph:
+                linked += 1
+                nodes.append(_node(version, case_ids, redacted=False))
+        elif on_graph and view == "auditor" and reason in {"FUTURE_INFORMATION", "INSUFFICIENT_PERMISSION", "NOT_IN_SNAPSHOT"}:
+            linked += 1
             nodes.append(_node(version, case_ids, redacted=True))
+    documents.sort(key=lambda item: (item["available_from"] or "", item["id"]))
     node_ids = {node["id"] for node in nodes}
     edges = []
     for edge in db.scalars(select(GraphEdge)).all():
@@ -84,6 +87,7 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
         ],
         "nodes": nodes,
         "edges": edges,
+        "documents": documents,
         "cases": [
             {
                 "id": case.id,
@@ -93,8 +97,22 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
             }
             for case in cases
         ],
-        "corpus": {"documents": len(versions), "on_graph": linked},
+        "corpus": {"documents": len(versions), "visible": len(documents), "on_graph": linked},
         "run": _run(db, organization_id),
+    }
+
+
+def _document(version: ArtifactVersion, case_ids: list[str], on_graph: bool) -> dict:
+    amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
+    return {
+        "id": version.artifact.external_id,
+        "version_id": version.id,
+        "kind": version.artifact.kind,
+        "title": version.artifact.title,
+        "amount": money(amount),
+        "available_from": version.available_from.isoformat() if version.available_from else None,
+        "case_id": case_ids[0] if case_ids else "",
+        "on_graph": on_graph,
     }
 
 

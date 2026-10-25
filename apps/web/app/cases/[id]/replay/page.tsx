@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, type ActorRow } from "@/lib/api";
+import { accountantId, actorsForCase, auditorId } from "@/lib/caseActors";
 
 type Detail = {
   finding: {
@@ -19,10 +20,20 @@ type Detail = {
 
 export default function ReplayPage() {
   const params = useParams<{ id: string }>();
-  const [actorId, setActorId] = useState("actor-jordan");
+  const [actors, setActors] = useState<ActorRow[]>([]);
+  const [actorId, setActorId] = useState("");
   const [detail, setDetail] = useState<Detail | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    actorsForCase(params.id)
+      .then((people) => {
+        setActors(people);
+        setActorId(accountantId(people));
+      })
+      .catch((reason: Error) => setError(reason.message));
+  }, [params.id]);
 
   async function run() {
     setError("");
@@ -48,7 +59,7 @@ export default function ReplayPage() {
     try {
       const result = await api<{ status: string }>(`/api/v1/proposals/${detail.proposal.id}/review`, {
         method: "POST",
-        body: JSON.stringify({ actor_id: "actor-jordan", decision, comment: "Reviewed in the demo." }),
+        body: JSON.stringify({ actor_id: auditorId(actors), decision, comment: "Reviewed against the company documents." }),
       });
       setMessage(`Proposal ${result.status}. The agent did not post an entry.`);
       setDetail({ ...detail, proposal: { ...detail.proposal, status: result.status } });
@@ -65,8 +76,9 @@ export default function ReplayPage() {
         <label>
           Investigator{" "}
           <select aria-label="Investigator" value={actorId} onChange={(event) => setActorId(event.target.value)}>
-            <option value="actor-maya">Maya Chen · accountant</option>
-            <option value="actor-jordan">Jordan Hale · auditor</option>
+            {actors.map((person) => (
+              <option key={person.id} value={person.id}>{person.name} · {person.role}</option>
+            ))}
           </select>
         </label>
         <button className="primary" onClick={run}>Run agent at 30 September 2025</button>

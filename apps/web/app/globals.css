@@ -117,6 +117,11 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0.2rem 0; }
 .empty { position: absolute; z-index: 1; left: 1.2rem; top: 5.5rem; max-width: 360px; }
 .inspector { max-height: calc(100vh - 140px); overflow: auto; }
 .finding { border-top: 1px solid var(--line); margin-top: 0.8rem; padding-top: 0.8rem; }
+.doc-search { display: grid; gap: 0.35rem; margin-top: 1rem; color: var(--muted); }
+.doc-search input, .stack input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.6rem; }
+.doc-list { max-height: 220px; overflow: auto; margin-top: 0.45rem; }
+.doc-list button, .case-list button { text-align: left; display: flex; justify-content: space-between; gap: 0.6rem; width: 100%; }
+.doc-list button { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
 .case-list { display: grid; gap: 0.4rem; margin-top: 1rem; }
 .case-list button { text-align: left; display: flex; justify-content: space-between; gap: 0.6rem; }
 .case-list span { color: var(--muted); }

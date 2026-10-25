@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { EvidenceGraph } from "@/components/EvidenceGraph";
 import { IngestModal, type IngestJob } from "@/components/IngestModal";
-import { API_URL, api, type CompanyGraph } from "@/lib/api";
+import { API_URL, api, type CompanyDocument, type CompanyGraph } from "@/lib/api";
 
 const PRESETS = [
   { id: "close", label: "30 Sep, before close", asOf: "2025-09-30T16:59:59+00:00" },
@@ -22,6 +22,7 @@ export default function HomePage() {
   const [open, setOpen] = useState(false);
   const [job, setJob] = useState<IngestJob | null>(null);
   const [pulse, setPulse] = useState(0);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     const view = graph?.actors.find((person) => person.id === actorId)?.role === "auditor" ? "auditor" : "agent";
@@ -58,6 +59,12 @@ export default function HomePage() {
   const node = shownNodes.find((item) => item.id === selected) || null;
   const activeCase = graph?.cases.find((item) => item.id === (focus || node?.case_id)) || null;
   const actors = graph?.actors.length ? graph.actors : [{ id: actorId, name: "Finance", role: "accountant" }];
+
+  function openDocument(document: CompanyDocument) {
+    if (document.case_id) setFocus(document.case_id);
+    const match = graph?.nodes.find((item) => item.version_id === document.version_id || item.label === document.id);
+    if (match) setSelected(match.id);
+  }
 
   function chooseCase(caseId: string) {
     setFocus(caseId);
@@ -112,7 +119,7 @@ export default function HomePage() {
       <aside className="panel inspector">
         <div className="eyebrow">Knowledge graph</div>
         <h2>{node?.redacted ? "Blocked" : node?.amount ? `$${node.amount}` : "Select a document"}</h2>
-        <p className="muted">{graph ? `${graph.corpus.documents} documents read · ${graph.corpus.on_graph} on the graph` : "Loading the graph…"}</p>
+        <p className="muted">{graph ? `${graph.corpus.visible} company documents in this snapshot · ${graph.corpus.documents} in the file` : "Loading the company documents…"}</p>
         {graph?.run && graph.run.status !== "completed" ? <p className="warn">{graph.run.label || graph.run.status} · {graph.run.completed}/{graph.run.total}</p> : null}
         {activeCase ? (
           <div className="finding">
@@ -132,6 +139,18 @@ export default function HomePage() {
           <dt>Source</dt>
           <dd>{node?.redacted ? "The amount and text stay hidden." : node?.text || "Choose a visible node."}</dd>
         </dl>
+        <label className="doc-search">
+          Company documents
+          <input aria-label="Search company documents" value={query} placeholder="Search invoices, orders, emails" onChange={(event) => setQuery(event.target.value)} />
+        </label>
+        <div className="doc-list">
+          {filteredDocuments(graph, query).map((document) => (
+            <button key={document.version_id} onClick={() => openDocument(document)}>
+              <strong>{document.id}</strong>
+              <span>{document.amount ? `$${document.amount}` : document.kind}</span>
+            </button>
+          ))}
+        </div>
         <div className="case-list">
           {(graph?.cases || []).map((item) => (
             <button key={item.id} className={focus === item.id ? "primary" : ""} onClick={() => chooseCase(item.id)}>
@@ -144,6 +163,13 @@ export default function HomePage() {
       <IngestModal open={open} job={job} onClose={() => setOpen(false)} onStarted={(next) => { setJob(next); setOpen(true); }} />
     </main>
   );
+}
+
+function filteredDocuments(graph: CompanyGraph | null, query: string) {
+  const needle = query.trim().toLowerCase();
+  return (graph?.documents || [])
+    .filter((document) => !needle || `${document.id} ${document.kind} ${document.title} ${document.case_id}`.toLowerCase().includes(needle))
+    .slice(0, 40);
 }
 
 function visibleGraph(graph: CompanyGraph | null, focus: string | null) {

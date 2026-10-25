@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { accountantId, actorsForCase } from "@/lib/caseActors";
 
 type Compare = {
   constrained: { finding: { summary: string; finding: string; blocked_access_attempts: number } };
@@ -12,10 +13,18 @@ type Compare = {
 
 export default function ComparePage() {
   const params = useParams<{ id: string }>();
+  const [actorId, setActorId] = useState("");
   const [result, setResult] = useState<Compare | null>(null);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    actorsForCase(params.id)
+      .then((people) => setActorId(accountantId(people)))
+      .catch((reason: Error) => setError(reason.message));
+  }, [params.id]);
+
   async function run() {
+    if (!actorId) return;
     setError("");
     try {
       setResult(
@@ -23,7 +32,7 @@ export default function ComparePage() {
           method: "POST",
           body: JSON.stringify({
             case_id: params.id,
-            actor_id: "actor-maya",
+            actor_id: actorId,
             as_of: "2025-09-30T23:59:00+00:00",
             mode: "audit",
           }),

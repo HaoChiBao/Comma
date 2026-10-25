@@ -4,18 +4,14 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { EvidenceGraph } from "@/components/EvidenceGraph";
 import { api, type ActorRow, type CaseRow, type GraphEdge, type GraphNode } from "@/lib/api";
-
-const FALLBACK_ACTORS: ActorRow[] = [
-  { id: "actor-maya", name: "Maya Chen", role: "accountant" },
-  { id: "actor-jordan", name: "Jordan Hale", role: "auditor" },
-];
+import { accountantId } from "@/lib/caseActors";
 
 export default function CasePage() {
   const params = useParams<{ id: string }>();
   const caseId = params.id;
   const [item, setItem] = useState<CaseRow | null>(null);
-  const [actors, setActors] = useState<ActorRow[]>(FALLBACK_ACTORS);
-  const [actorId, setActorId] = useState("actor-maya");
+  const [actors, setActors] = useState<ActorRow[]>([]);
+  const [actorId, setActorId] = useState("");
   const [mode, setMode] = useState("audit");
   const [day, setDay] = useState("2025-09-30");
   const [snapshotId, setSnapshotId] = useState("");
@@ -32,14 +28,14 @@ export default function CasePage() {
         setItem(row);
         const people = await api<ActorRow[]>("/api/v1/actors");
         const matched = people.filter((person) => person.organization_id === row.organization_id);
-        const next = matched.length ? matched : FALLBACK_ACTORS;
-        setActors(next);
-        setActorId((current) => (next.some((person) => person.id === current) ? current : next[0].id));
+        setActors(matched);
+        setActorId((current) => (matched.some((person) => person.id === current) ? current : accountantId(matched)));
       })
       .catch((reason: Error) => setError(reason.message));
   }, [caseId]);
 
   useEffect(() => {
+    if (!actorId) return;
     const actor = actors.find((person) => person.id === actorId);
     const view = actor?.role === "auditor" ? "auditor" : "agent";
     api<{ id: string; manifest_hash: string }>("/api/v1/snapshots", {
