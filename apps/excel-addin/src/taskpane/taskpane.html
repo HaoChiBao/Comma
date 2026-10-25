@@ -3,12 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>WorldState</title>
+    <title>Comma</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://hyphenate.ai" crossorigin />
     <style>
-      /* Palette and spacing follow the WorldState sidebar design (S2c). Light only, as designed. */
+      /* Palette and spacing follow the Comma sidebar design (S2c). Light only, as designed. */
+      @font-face {
+        font-family: "Saans";
+        src: url("https://hyphenate.ai/_next/static/media/SaansUprightsVF-s.p.2syun8fkh7gq3.woff2?dpl=dpl_EQxQJ6n7PbybBqCGj2AhSnQQGkAb") format("woff2");
+        font-style: normal;
+        font-weight: 300 900;
+        font-display: swap;
+      }
       :root {
         --gutter: clamp(10px, 4vw, 16px);
         --ink: #1f1a17;
@@ -24,7 +30,7 @@
       }
       * { box-sizing: border-box; }
       html, body, #root { height: 100%; }
-      body { margin: 0; background: #ffffff; color: var(--ink); font: 13px/1.4 "Segoe UI", Inter, system-ui, sans-serif; }
+      body { margin: 0; background: #ffffff; color: var(--ink); font: 13px/1.4 "Saans", "Segoe UI", system-ui, sans-serif; }
       button { font: inherit; color: inherit; }
       .ws { display: flex; flex-direction: column; width: 100%; min-width: 0; height: 100%; position: relative; }
       .ws button:focus-visible, .ws-nd:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -37,13 +43,9 @@
       .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
       .top { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 10px var(--gutter); border-bottom: 1px solid var(--line); }
-      .brand { font-weight: 600; font-size: 14px; }
+      .brand-logo { display: block; width: 100px; height: 34px; object-fit: contain; }
       .top-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
       .actor-select select { max-width: 152px; height: 30px; padding: 0 6px; font: inherit; color: var(--ink); background: #fff; border: 1px solid var(--border); border-radius: 4px; }
-      .dot { width: 7px; height: 7px; display: inline-block; border-radius: 50%; background: #9a918a; }
-      .dot.ready { background: #2e6b52; }
-      .dot.down { background: #b42318; }
-      .dot.checking { background: #b5530f; }
       .asof-button { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; }
       .caret { font-size: 10px; }
       .asof-menu { position: absolute; right: 16px; top: 48px; z-index: 5; width: 230px; background: #fff; border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 20px rgba(31, 26, 23, 0.12); padding: 6px 0; }

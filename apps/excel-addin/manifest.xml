@@ -2,9 +2,9 @@
 <OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0" xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="TaskPaneApp">
   <Id>5b1c4a8e-2f0d-4c47-9a7e-3d6f1e0b8c21</Id>
   <Version>1.0.0.0</Version>
-  <ProviderName>WorldState</ProviderName>
+  <ProviderName>Comma</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="WorldState"/>
+  <DisplayName DefaultValue="Comma"/>
   <Description DefaultValue="Trace a spreadsheet cell to its formula and the evidence available at a point in time."/>
   <IconUrl DefaultValue="https://localhost:3001/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://localhost:3001/assets/icon-64.png"/>
@@ -77,13 +77,13 @@
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3001/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GetStarted.Title" DefaultValue="WorldState is ready"/>
-        <bt:String id="Group.Label" DefaultValue="WorldState"/>
-        <bt:String id="TaskpaneButton.Label" DefaultValue="WorldState"/>
+        <bt:String id="GetStarted.Title" DefaultValue="Comma is ready"/>
+        <bt:String id="Group.Label" DefaultValue="Comma"/>
+        <bt:String id="TaskpaneButton.Label" DefaultValue="Comma"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="GetStarted.Description" DefaultValue="Select a cell and open WorldState from the Home tab to trace it."/>
-        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Open the WorldState inspector"/>
+        <bt:String id="GetStarted.Description" DefaultValue="Select a cell and open Comma from the Home tab to trace it."/>
+        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Open the Comma inspector"/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

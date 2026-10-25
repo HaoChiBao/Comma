@@ -114,7 +114,7 @@ export function ResultView({ trace, vendor, selected, onSelect, onOpenSource, on
       {noteOpen ? (
         <form id="custom-note-composer" className="note-composer" onSubmit={(event) => void submitNote(event)}>
           <label htmlFor="custom-note-message">Note for {trace.cell.address}</label>
-          <p className="mute small">This appears in Excel’s native note popup. Existing notes not created by WorldState are left unchanged.</p>
+          <p className="mute small">This appears in Excel’s native note popup. Existing notes not created by Comma are left unchanged.</p>
           <textarea id="custom-note-message" value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="Write your note…" rows={4} maxLength={30000} autoFocus />
           <div className="note-composer-actions">
             <button type="submit" className="ws-prim action" disabled={busy || !noteDraft.trim()}>Add note</button>

@@ -50,7 +50,7 @@ export function IdleView({
           {error}
         </p>
       ) : null}
-      <p className="lede">WorldState rebuilds what was knowable on {asOfShort}, finds every document behind this number and checks it.</p>
+      <p className="lede">Comma rebuilds what was knowable on {asOfShort}, finds every document behind this number and checks it.</p>
       <div className="flagged">
         <span className="section-label">Flagged on this sheet</span>
         {scanNote ? <p className="mute small flagged-note">{scanNote}</p> : null}
