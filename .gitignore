@@ -13,3 +13,5 @@ playwright-report/
 test-results/
 .DS_Store
 services/api/.venv/
+worldstate.db
+services/api/worldstate.db

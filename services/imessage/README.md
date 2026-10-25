@@ -21,5 +21,5 @@ npm run start
 ## Where to go next
 
 - [Spectrum docs](https://photon.codes/docs/spectrum-ts)
-- Edit `src/index.ts` to replace the echo loop with real agent logic.
+- The agent loop lives in `src/index.ts`.
 - Add more providers from `spectrum-ts/providers/*`.

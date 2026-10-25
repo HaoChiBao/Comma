@@ -1,26 +1,49 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export type Actor = {
+export type CaseRow = {
   id: string;
-  display_name: string;
-  role: string;
-  phone_e164: string;
-  company_id: string;
-  company_name: string;
+  case_type: string;
+  summary: string;
+  vendor_name: string;
+  decision_at: string;
+  recorded_amount: string;
+  status: string;
 };
 
-export function authHeaders(token: string): HeadersInit {
-  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-}
+export type GraphNode = {
+  id: string;
+  type: string;
+  label: string;
+  title: string;
+  amount: string | null;
+  origin: string;
+  version_id: string;
+  available_from: string | null;
+  document_date: string | null;
+  redacted: boolean;
+  reason?: string;
+};
 
-export async function api<T>(path: string, token: string | null, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const response = await fetch(`${API_URL}${path}`, { ...init, headers });
+export type GraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  inferred: boolean;
+  explanation: string;
+  confidence: string;
+};
+
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    cache: "no-store",
+  });
+  const body = await response.json();
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || response.statusText);
+    const code = typeof body?.code === "string" ? body.code : `HTTP_${response.status}`;
+    throw new Error(code);
   }
-  return response.json() as Promise<T>;
+  return body as T;
 }

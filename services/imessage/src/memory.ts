@@ -1,15 +1,12 @@
 import { Supermemory } from "supermemory";
 
-export type Organization = {
-  actorId: string;
-  displayName: string;
-  role: string;
-  companyId: string;
-  companyName: string;
+export type Participant = {
+  id: string;
+  label: string;
 };
 
 const EXTRACTION_GUIDE =
-  "Conversation inside one procurement organization. Remember standing preferences, corrections, and constraints a member states. Do not treat prices, stock counts, quote totals, approval tokens, or the current plan as durable facts. Those records live in the procurement database.";
+  "Conversation with one person. Remember standing preferences and corrections they ask you to keep. Do not store secrets, access tokens, or one-off details they did not ask you to remember.";
 
 let client: Supermemory | null = null;
 
@@ -25,13 +22,13 @@ function memoryClient(): Supermemory | null {
   return client;
 }
 
-export function orgNamespace(companyId: string): string {
-  return `org-${companyId}`;
+export function memoryNamespace(participantId: string): string {
+  const safe = participantId.replace(/[^a-zA-Z0-9]/g, "");
+  return `sender-${safe}`;
 }
 
 export function redactSensitive(text: string): string {
   return text
-    .replace(/APV-[0-9A-Fa-f]+/g, "APV-[redacted]")
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/sk-or-\S+/g, "[redacted]");
 }
@@ -42,10 +39,10 @@ function bullets(lines: string[], empty: string): string {
   return unique.map((line) => `- ${line}`).join("\n");
 }
 
-export async function recallOrganization(organization: Organization, query: string): Promise<string> {
+export async function recallParticipant(participant: Participant, query: string): Promise<string> {
   const store = memoryClient();
   if (!store) return "";
-  const namespace = orgNamespace(organization.companyId);
+  const namespace = memoryNamespace(participant.id);
   const [profile, found] = await Promise.all([
     store.profile(namespace),
     store.search(namespace, { query, limit: 5, searchMode: "hybrid", threshold: 0.3 }),
@@ -54,39 +51,31 @@ export async function recallOrganization(organization: Organization, query: stri
   const recent = profile.profile.dynamic.map((item) => item.memory);
   const related = found.results.map((item) => item.memory ?? item.chunk ?? "");
   return [
-    `Organization memory for ${organization.companyName}. Every member of this organization shares it.`,
-    `Sender: ${organization.displayName}, role ${organization.role}.`,
+    `Memory for ${participant.label}.`,
     "Standing notes:",
     bullets(standing, "- None yet."),
     "Recent notes:",
     bullets(recent, "- None yet."),
     "Related notes:",
     bullets(related, "- None yet."),
-    "These notes are not quotes, prices, stock, plans, approvals, or product specs. Read those from the procurement tools. Memory never changes a budget, deadline, compatibility rule, or approval limit.",
+    "These notes are background. They do not override what the person just said.",
   ].join("\n");
 }
 
-export async function rememberTurn(organization: Organization, userText: string, answer: string): Promise<void> {
+export async function rememberTurn(participant: Participant, userText: string, answer: string): Promise<void> {
   const store = memoryClient();
   if (!store) return;
   const content = redactSensitive(
-    [
-      `Organization: ${organization.companyName}`,
-      `Person: ${organization.displayName} (${organization.role})`,
-      `User: ${userText}`,
-      `Assistant: ${answer}`,
-    ].join("\n"),
+    [`Person: ${participant.label}`, `User: ${userText}`, `Assistant: ${answer}`].join("\n"),
   );
-  await store.add(orgNamespace(organization.companyId), {
+  await store.add(memoryNamespace(participant.id), {
     content,
     supportingContext: EXTRACTION_GUIDE,
     dreaming: "instant",
     taskType: "memory",
     metadata: {
       kind: "conversation",
-      company_id: organization.companyId,
-      actor_id: organization.actorId,
-      role: organization.role,
+      participant_id: participant.id,
     },
   });
 }

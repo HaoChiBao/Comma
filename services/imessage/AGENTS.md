@@ -1,6 +1,6 @@
 # imessage — agent instructions
 
-This is a [Spectrum](https://photon.codes/docs/spectrum-ts) app, pinned to `spectrum-ts@^12.14.0`. The entry point is `src/index.ts`, which configures the imessage provider(s) and runs the echo loop.
+This is a [Spectrum](https://photon.codes/docs/spectrum-ts) app, pinned to `spectrum-ts@^12.14.0`. The entry point is `src/index.ts`, which configures the imessage provider and answers with the Deep Agents harness.
 
 ## Working in this project
 

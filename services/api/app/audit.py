@@ -1,42 +1,42 @@
-import uuid
-from typing import Any
+from datetime import datetime, timezone
+from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clock import clock
-from app.models import WorkEvent
+from app.models import AuditEvent
+from app.temporal import canonical, sha256_text
 
 
-def record(
-    session: Session,
-    *,
-    company_id: uuid.UUID | None,
-    task_id: uuid.UUID | None,
-    actor_type: str,
-    actor_id: uuid.UUID | None,
-    action: str,
-    previous_state: str | None,
-    new_state: str | None,
-    reason: str | None,
-    diff: dict | None = None,
-    evidence_refs: list | None = None,
-    allowed: bool,
-) -> WorkEvent:
-    refs = [ref for ref in (evidence_refs or []) if ref is not None and ref != ""]
-    event = WorkEvent(
-        id=uuid.uuid4(),
-        company_id=company_id,
-        task_id=task_id,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        action=action,
-        previous_state=previous_state,
-        new_state=new_state,
-        reason=reason,
-        diff_json=diff or {},
-        evidence_refs_json=refs,
-        allowed=allowed,
-        created_at=clock.now(),
+def append_event(db: Session, organization_id: str, event_type: str, subject_id: str, payload: dict, actor_id: str | None) -> AuditEvent:
+    previous = db.scalar(
+        select(AuditEvent).where(AuditEvent.organization_id == organization_id).order_by(AuditEvent.timestamp.desc())
     )
-    session.add(event)
+    previous_hash = previous.event_hash if previous else "0" * 64
+    timestamp = datetime.now(timezone.utc)
+    event_id = uuid4().hex
+    body = canonical(
+        {
+            "id": event_id,
+            "organization_id": organization_id,
+            "event_type": event_type,
+            "subject_id": subject_id,
+            "payload": payload,
+            "actor_id": actor_id,
+            "timestamp": timestamp.isoformat(),
+            "previous_event_hash": previous_hash,
+        }
+    )
+    event = AuditEvent(
+        id=event_id,
+        organization_id=organization_id,
+        event_type=event_type,
+        subject_id=subject_id,
+        payload_json=payload,
+        actor_id=actor_id,
+        timestamp=timestamp,
+        previous_event_hash=previous_hash,
+        event_hash=sha256_text(body),
+    )
+    db.add(event)
     return event

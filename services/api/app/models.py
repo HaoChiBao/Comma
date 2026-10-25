@@ -1,299 +1,180 @@
-import uuid
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import (
-    Boolean,
-    Date,
-    DateTime,
-    ForeignKey,
-    Integer,
-    Numeric,
-    Text,
-    UniqueConstraint,
-)
-from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
 
 
-def _uuid() -> uuid.UUID:
-    return uuid.uuid4()
-
-
-class Company(Base):
-    __tablename__ = "companies"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(Text)
-    currency: Mapped[str] = mapped_column(Text, default="USD")
-    timezone: Mapped[str] = mapped_column(Text, default="America/Chicago")
-    ship_to: Mapped[str] = mapped_column(Text, default="")
+class Organization(Base):
+    __tablename__ = "organizations"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
 
 
 class Actor(Base):
     __tablename__ = "actors"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    display_name: Mapped[str] = mapped_column(Text)
-    role: Mapped[str] = mapped_column(Text)
-    phone_e164: Mapped[str] = mapped_column(Text, unique=True)
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(200))
+    role: Mapped[str] = mapped_column(String(64))
 
 
-class ProcurementTask(Base):
-    __tablename__ = "procurement_tasks"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("actors.id"))
-    public_code: Mapped[str] = mapped_column(Text, unique=True)
-    item_spec_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    quantity: Mapped[int | None] = mapped_column(Integer)
-    budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
-    currency: Mapped[str] = mapped_column(Text, default="USD")
-    delivery_deadline: Mapped[date | None] = mapped_column(Date)
-    destination: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text)
-    version: Mapped[int] = mapped_column(Integer, default=1)
-    preferences_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    assumptions_json: Mapped[list] = mapped_column(JSONB, default=list)
-    blocked_reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+class SourceArtifact(Base):
+    __tablename__ = "source_artifacts"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    kind: Mapped[str] = mapped_column(String(64))
+    source_system: Mapped[str] = mapped_column(String(64))
+    external_id: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(300))
+    versions: Mapped[list["ArtifactVersion"]] = relationship(back_populates="artifact")
 
 
-class BomVersion(Base):
-    __tablename__ = "bom_versions"
-    __table_args__ = (UniqueConstraint("task_id", "version"),)
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    version: Mapped[int] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(Text)
+class ArtifactVersion(Base):
+    __tablename__ = "artifact_versions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(ForeignKey("source_artifacts.id"))
+    version: Mapped[int] = mapped_column()
+    content_text: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    document_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    business_valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    business_valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    availability_status: Mapped[str] = mapped_column(String(32))
+    availability_evidence: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[dict] = mapped_column(JSON)
+    artifact: Mapped[SourceArtifact] = relationship(back_populates="versions")
+    grants: Mapped[list["AccessGrant"]] = relationship(back_populates="version")
+    facts: Mapped[list["Fact"]] = relationship(back_populates="version")
 
 
-class BomLine(Base):
-    __tablename__ = "bom_lines"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    bom_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("bom_versions.id"))
-    component_type: Mapped[str] = mapped_column(Text)
-    required_sku: Mapped[str] = mapped_column(Text)
-    units_per_computer: Mapped[int] = mapped_column(Integer)
-    allowed_substitutes_json: Mapped[list] = mapped_column(JSONB, default=list)
-    spec_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    position: Mapped[int] = mapped_column(Integer)
+class AccessGrant(Base):
+    __tablename__ = "access_grants"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    artifact_version_id: Mapped[str] = mapped_column(ForeignKey("artifact_versions.id"))
+    role: Mapped[str] = mapped_column(String(64))
+    grant_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    grant_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    permission: Mapped[str] = mapped_column(String(32), default="read")
+    version: Mapped[ArtifactVersion] = relationship(back_populates="grants")
 
 
-class CompatibilityRule(Base):
-    __tablename__ = "component_compatibility_rules"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    rule_type: Mapped[str] = mapped_column(Text)
-    constraint_json: Mapped[dict] = mapped_column(JSONB)
+class Fact(Base):
+    __tablename__ = "facts"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    artifact_version_id: Mapped[str] = mapped_column(ForeignKey("artifact_versions.id"))
+    fact_type: Mapped[str] = mapped_column(String(64))
+    entity_ref: Mapped[str] = mapped_column(String(80), default="")
+    amount_decimal: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    value_text: Mapped[str] = mapped_column(Text, default="")
+    source_locator: Mapped[str] = mapped_column(String(200), default="")
+    extraction_status: Mapped[str] = mapped_column(String(32), default="seeded")
+    version: Mapped[ArtifactVersion] = relationship(back_populates="facts")
 
 
-class Supplier(Base):
-    __tablename__ = "suppliers"
-    __table_args__ = (UniqueConstraint("company_id", "code"),)
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    name: Mapped[str] = mapped_column(Text)
-    code: Mapped[str] = mapped_column(Text)
-    contact_email: Mapped[str] = mapped_column(Text)
-    approved: Mapped[bool] = mapped_column(Boolean, default=False)
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
-class CatalogItem(Base):
-    __tablename__ = "supplier_catalog"
-    __table_args__ = (UniqueConstraint("supplier_id", "sku"),)
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"))
-    sku: Mapped[str] = mapped_column(Text)
-    component_type: Mapped[str] = mapped_column(Text)
-    spec_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    indicative_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
-    available_qty: Mapped[int] = mapped_column(Integer)
-    min_order_qty: Mapped[int] = mapped_column(Integer, default=1)
-    indicative_lead_days: Mapped[int] = mapped_column(Integer)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-
-class Rfq(Base):
-    __tablename__ = "rfqs"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"))
-    correlation_token: Mapped[str] = mapped_column(Text, unique=True)
-    status: Mapped[str] = mapped_column(Text)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    requested_json: Mapped[list] = mapped_column(JSONB, default=list)
+class GraphEdge(Base):
+    __tablename__ = "graph_edges"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    from_node_id: Mapped[str] = mapped_column(String(80))
+    to_node_id: Mapped[str] = mapped_column(String(80))
+    edge_type: Mapped[str] = mapped_column(String(64))
+    supporting_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confidence: Mapped[str] = mapped_column(String(16), default="high")
+    is_inferred: Mapped[bool] = mapped_column(default=False)
+    explanation: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-class Message(Base):
-    __tablename__ = "messages"
-    __table_args__ = (UniqueConstraint("provider", "provider_message_id"),)
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    provider: Mapped[str] = mapped_column(Text)
-    provider_message_id: Mapped[str] = mapped_column(Text)
-    direction: Mapped[str] = mapped_column(Text)
-    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("actors.id"))
-    rfq_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("rfqs.id"))
-    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    raw_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    normalized_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+class Case(Base):
+    __tablename__ = "cases"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    case_type: Mapped[str] = mapped_column(String(64))
+    decision_artifact_id: Mapped[str] = mapped_column(String(64))
+    decision_version_id: Mapped[str] = mapped_column(String(64))
+    decision_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    summary: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="open")
+    vendor_name: Mapped[str] = mapped_column(String(200))
+    entity_ref: Mapped[str] = mapped_column(String(80))
+    recorded_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    probe_version_ids: Mapped[list] = mapped_column(JSON)
 
 
-class SupplierQuote(Base):
-    __tablename__ = "supplier_quotes"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    rfq_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("rfqs.id"))
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"))
-    bom_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("bom_lines.id"))
-    sku: Mapped[str] = mapped_column(Text)
-    component_type: Mapped[str | None] = mapped_column(Text)
-    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
-    currency: Mapped[str] = mapped_column(Text, default="USD")
-    available_qty: Mapped[int | None] = mapped_column(Integer)
-    min_order_qty: Mapped[int | None] = mapped_column(Integer)
-    shipping_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
-    taxes_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
-    estimated_arrival: Mapped[date | None] = mapped_column(Date)
-    valid_until: Mapped[date | None] = mapped_column(Date)
-    evidence_ref: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text)
-    version: Mapped[int] = mapped_column(Integer, default=1)
-    spec_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    uncertainty_json: Mapped[list] = mapped_column(JSONB, default=list)
+class Snapshot(Base):
+    __tablename__ = "snapshots"
+    __table_args__ = (UniqueConstraint("case_id", "actor_id", "as_of", "mode", name="uq_snapshot_key"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"))
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    actor_id: Mapped[str] = mapped_column(ForeignKey("actors.id"))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    mode: Mapped[str] = mapped_column(String(32))
+    allowed_manifest_json: Mapped[list] = mapped_column(JSON)
+    excluded_counts_json: Mapped[dict] = mapped_column(JSON)
+    manifest_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-class PurchasePlan(Base):
-    __tablename__ = "purchase_plans"
-    __table_args__ = (UniqueConstraint("task_id", "version"),)
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    version: Mapped[int] = mapped_column(Integer)
-    plan_hash: Mapped[str] = mapped_column(Text)
-    total_landed_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
-    currency: Mapped[str] = mapped_column(Text, default="USD")
-    assumptions_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    alternatives_json: Mapped[list] = mapped_column(JSONB, default=list)
-    status: Mapped[str] = mapped_column(Text)
-    readiness_computers: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+class Investigation(Base):
+    __tablename__ = "investigations"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"))
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("snapshots.id"))
+    agent_version: Mapped[str] = mapped_column(String(32))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finding_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(32))
 
 
-class PurchasePlanLine(Base):
-    __tablename__ = "purchase_plan_lines"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    plan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("purchase_plans.id"))
-    bom_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("bom_lines.id"))
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"))
-    quote_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("supplier_quotes.id"))
-    sku: Mapped[str] = mapped_column(Text)
-    component_type: Mapped[str] = mapped_column(Text)
-    quantity: Mapped[int] = mapped_column(Integer)
-    unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
-    extended_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+class ToolEvent(Base):
+    __tablename__ = "tool_events"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(ForeignKey("investigations.id"))
+    tool_name: Mapped[str] = mapped_column(String(64))
+    params_json: Mapped[dict] = mapped_column(JSON)
+    result_ids_json: Mapped[list] = mapped_column(JSON)
+    blocked_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Proposal(Base):
+    __tablename__ = "proposals"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(ForeignKey("investigations.id"))
+    action_type: Mapped[str] = mapped_column(String(64))
+    payload_json: Mapped[dict] = mapped_column(JSON)
+    rationale: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
 
 
 class Approval(Base):
     __tablename__ = "approvals"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    plan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("purchase_plans.id"))
-    plan_hash: Mapped[str] = mapped_column(Text)
-    requested_from: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("actors.id"))
-    status: Mapped[str] = mapped_column(Text)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    response_message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    token: Mapped[str] = mapped_column(Text, unique=True)
-    reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    proposal_id: Mapped[str] = mapped_column(ForeignKey("proposals.id"))
+    actor_id: Mapped[str] = mapped_column(ForeignKey("actors.id"))
+    decision: Mapped[str] = mapped_column(String(32))
+    comment: Mapped[str] = mapped_column(Text, default="")
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-class PurchaseOrder(Base):
-    __tablename__ = "purchase_orders"
-    __table_args__ = (UniqueConstraint("plan_id", "supplier_id"),)
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    plan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("purchase_plans.id"))
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"))
-    po_number: Mapped[str] = mapped_column(Text, unique=True)
-    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
-    currency: Mapped[str] = mapped_column(Text, default="USD")
-    status: Mapped[str] = mapped_column(Text)
-    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
-    provider_ref: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-
-class Outbox(Base):
-    __tablename__ = "outbox"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    kind: Mapped[str] = mapped_column(Text)
-    aggregate_id: Mapped[str] = mapped_column(Text)
-    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
-    payload_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    status: Mapped[str] = mapped_column(Text)
-    attempts: Mapped[int] = mapped_column(Integer, default=0)
-    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    provider_ref: Mapped[str | None] = mapped_column(Text)
-    last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-
-class WorkEvent(Base):
-    __tablename__ = "work_events"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    actor_type: Mapped[str] = mapped_column(Text)
-    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    action: Mapped[str] = mapped_column(Text)
-    previous_state: Mapped[str | None] = mapped_column(Text)
-    new_state: Mapped[str | None] = mapped_column(Text)
-    reason: Mapped[str | None] = mapped_column(Text)
-    diff_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    evidence_refs_json: Mapped[list] = mapped_column(JSONB, default=list)
-    allowed: Mapped[bool] = mapped_column(Boolean)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-
-class WorkerJob(Base):
-    __tablename__ = "worker_jobs"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("procurement_tasks.id"))
-    kind: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text)
-    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    attempts: Mapped[int] = mapped_column(Integer, default=0)
-    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    idempotency_key: Mapped[str | None] = mapped_column(Text)
-    payload_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-
-class SandboxDelivery(Base):
-    __tablename__ = "sandbox_deliveries"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    channel: Mapped[str] = mapped_column(Text)
-    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
-    provider_ref: Mapped[str] = mapped_column(Text)
-    payload_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    event_type: Mapped[str] = mapped_column(String(64))
+    subject_id: Mapped[str] = mapped_column(String(64))
+    payload_json: Mapped[dict] = mapped_column(JSON)
+    actor_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    previous_event_hash: Mapped[str] = mapped_column(String(64))
+    event_hash: Mapped[str] = mapped_column(String(64))

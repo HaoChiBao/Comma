@@ -1,149 +1,12 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { tool } from "langchain";
 import { z } from "zod";
-
-export const senderContext = new AsyncLocalStorage<string>();
 
 export function normalizePhone(value: string): string {
   let text = value.trim().replaceAll(" ", "").replaceAll("-", "");
   if (text.startsWith("00")) text = `+${text.slice(2)}`;
   if (/^\d+$/.test(text)) text = `+${text}`;
   return text;
-}
-
-const taskId = z.object({
-  task_id: z.string().describe("Procurement task id from list_tasks"),
-});
-
-const catalog: { name: string; description: string; schema: z.ZodObject }[] = [
-  {
-    name: "list_tasks",
-    description: "List procurement tasks for the sender's organization. Returns id, public_code, status, and quantity. Call this first when you do not already have a task id.",
-    schema: z.object({}),
-  },
-  {
-    name: "submit_message",
-    description:
-      "Send the person's words into procurement. Starts a new request, fills in missing details on an open request, and applies APPROVE APV- or REJECT APV- decisions. Does not invent quotes.",
-    schema: z.object({
-      text: z.string().describe("The exact message to submit"),
-    }),
-  },
-  {
-    name: "get_bom",
-    description: "Read the bill of materials for a task: component, required SKU, units per computer, and allowed substitutes.",
-    schema: taskId,
-  },
-  {
-    name: "get_plan",
-    description:
-      "Read the saved purchase plan, including lines, landed cost, readiness, and rejected alternatives. Does not create a new plan.",
-    schema: taskId,
-  },
-  {
-    name: "get_approval",
-    description: "Read the open approval: APV token, approver name, and expiry. Does not approve the plan.",
-    schema: taskId,
-  },
-  {
-    name: "cancel_task",
-    description: "Cancel a procurement task before purchase orders are sent.",
-    schema: taskId,
-  },
-  {
-    name: "get_task",
-    description: "Get one procurement task for the sender's organization, including status, quantity, budget, deadline, and destination.",
-    schema: taskId,
-  },
-  {
-    name: "list_known_suppliers",
-    description: "List approved suppliers that can quote this task, with their ids and SKUs.",
-    schema: taskId,
-  },
-  {
-    name: "get_supplier_catalog",
-    description: "List catalog rows that match this task's bill of materials.",
-    schema: taskId,
-  },
-  {
-    name: "get_valid_quotes",
-    description: "List fresh supplier quotes for this task and any RFQs still needed.",
-    schema: taskId,
-  },
-  {
-    name: "send_rfq",
-    description: "Queue a request for quote to one supplier. Email stays in the sandbox and is not delivered.",
-    schema: taskId.extend({
-      supplier_id: z.string().describe("Supplier id from list_known_suppliers"),
-    }),
-  },
-  {
-    name: "list_pending_rfqs",
-    description: "List RFQs for this task that do not have a quote yet.",
-    schema: taskId,
-  },
-  {
-    name: "request_supplier_clarification",
-    description: "Queue a clarification question on an existing RFQ. It stays in the sandbox.",
-    schema: z.object({
-      rfq_id: z.string(),
-      question: z.string().optional(),
-    }),
-  },
-  {
-    name: "calculate_purchase_plan",
-    description: "Compute the landed-cost purchase plan for this task. Does not place an order.",
-    schema: taskId,
-  },
-  {
-    name: "propose_plan",
-    description: "Save the current feasible plan as the proposed plan. Does not approve it or create a purchase order.",
-    schema: taskId,
-  },
-  {
-    name: "request_approval",
-    description: "Ask a human to approve a proposed plan. Does not approve it.",
-    schema: taskId.extend({
-      plan_id: z.string().describe("Plan id returned by propose_plan"),
-    }),
-  },
-  {
-    name: "get_task_events",
-    description: "List the audit events for one task.",
-    schema: taskId,
-  },
-];
-
-export function procurementTools(apiUrl: string, token: string) {
-  const base = apiUrl.replace(/\/$/, "");
-  return catalog.map((spec) =>
-    tool(
-      async (input) => {
-        const sender = senderContext.getStore();
-        const response = await fetch(`${base}/tools/${spec.name}`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            ...(sender ? { "X-Sender-Phone": sender } : {}),
-          },
-          body: JSON.stringify(input ?? {}),
-          signal: AbortSignal.timeout(60_000),
-        });
-        const text = await response.text();
-        if (!response.ok) {
-          return `Tool ${spec.name} failed (${response.status}): ${text.slice(0, 500)}`;
-        }
-        return text.slice(0, 12_000);
-      },
-      {
-        name: spec.name,
-        description: spec.description,
-        schema: spec.schema,
-      },
-    ),
-  );
 }
 
 export function webSearchTool(model: string) {
@@ -158,7 +21,7 @@ export function webSearchTool(model: string) {
         {
           role: "system",
           content:
-            "Search the public web and reply with a JSON array of up to 5 objects with title, url, and snippet. These are public pages, not supplier quotes.",
+            "Search the public web and reply with a JSON array of up to 5 objects with title, url, and snippet.",
         },
         { role: "user", content: query },
       ]);
@@ -167,8 +30,7 @@ export function webSearchTool(model: string) {
     },
     {
       name: "web_search",
-      description:
-        "Search the public web for component specs, manufacturers, and lead times. Results are not supplier quotes and must not be saved as quotes or used as plan prices.",
+      description: "Search the public web. Use this for current public information that is not already in the conversation.",
       schema: z.object({
         query: z.string().describe("What to look up"),
       }),
