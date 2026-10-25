@@ -6,7 +6,7 @@ import { EvidenceGraph } from "@/components/EvidenceGraph";
 import { InvestigationPanel } from "@/components/InvestigationPanel";
 import { NodeSummary, useNodeSummary } from "@/components/NodeSummary";
 import { IngestModal, type IngestJob } from "@/components/IngestModal";
-import { API_URL, api, type ActorRow, type CompanyDocument, type CompanyGraph, type GraphEdge, type GraphNode } from "@/lib/api";
+import { API_URL, api, type CompanyDocument, type CompanyGraph, type GraphEdge, type GraphNode } from "@/lib/api";
 import {
   buildInvestigation,
   learnPrecedent,
@@ -23,10 +23,11 @@ function toUtcIso(date: Date) {
   return `${date.toISOString().slice(0, 19)}+00:00`;
 }
 
+const DECAGON_ORG = "org-decagon";
+const DECAGON_READER = "actor-decagon-finance";
+
 export default function HomePage() {
   const [graph, setGraph] = useState<CompanyGraph | null>(null);
-  const [allActors, setAllActors] = useState<ActorRow[]>([]);
-  const [actorId, setActorId] = useState("actor-maya");
   const [asOf, setAsOf] = useState(() => toUtcIso(new Date()));
   const [mode, setMode] = useState("audit");
   const [viewMode, setViewMode] = useState<"web" | "atom">("web");
@@ -56,48 +57,28 @@ export default function HomePage() {
   const [narrating, setNarrating] = useState(false);
   const reviewToken = useRef(0);
   const [deepLinkReady, setDeepLinkReady] = useState(false);
-  const [actorsReady, setActorsReady] = useState(false);
   const [caseGraphLoaded, setCaseGraphLoaded] = useState(false);
   const requestedNodeId = useRef<string | null>(null);
 
-  // Apply URL context before fetching graph data so actor and organization stay aligned.
+  // Apply URL context before fetching. The homepage always reads Decagon.
   useEffect(() => {
     const deepLink = parseGraphDeepLink(window.location.search);
     requestedNodeId.current = deepLink.selected;
     if (deepLink.focus) setFocus(deepLink.focus);
-    if (deepLink.actorId) setActorId(deepLink.actorId);
     if (deepLink.asOf) setAsOf(deepLink.asOf);
     if (deepLink.mode) setMode(deepLink.mode);
     if (deepLink.viewMode) setViewMode(deepLink.viewMode);
     setDeepLinkReady(true);
   }, []);
 
-  // 1. Fetch available actors
-  useEffect(() => {
-    api<ActorRow[]>("/api/v1/actors")
-      .then((people) => {
-        setAllActors(people);
-        const requestedActor = new URLSearchParams(window.location.search).get("actor_id");
-        if (requestedActor && people.some((person) => person.id === requestedActor)) {
-          setActorId(requestedActor);
-        } else if (!people.some((p) => p.id === actorId) && people.length > 0) {
-          const defaultActor = people.find((p) => p.id === "actor-maya") || people[0];
-          setActorId(defaultActor.id);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setActorsReady(true));
-  }, []);
-
-  const currentActor = allActors.find((a) => a.id === actorId);
-
-  // Combined graph: Acme and Decagon together, without choosing a person.
   useEffect(() => {
     if (!deepLinkReady) return;
     const params = new URLSearchParams({
-      scope: "all",
+      organization_id: DECAGON_ORG,
+      actor_id: DECAGON_READER,
       as_of: asOf,
       mode,
+      view: "agent",
     });
     api<CompanyGraph>(`/api/v1/company-graph?${params}`)
       .then((next) => {
@@ -109,27 +90,26 @@ export default function HomePage() {
 
   // 3. When focused on a specific case, fetch its snapshot
   useEffect(() => {
-    if (!deepLinkReady || !actorsReady) return;
-    if (!focus || !actorId) {
+    if (!deepLinkReady) return;
+    if (!focus) {
       setCaseNodes([]);
       setCaseEdges([]);
       setCaseGraphLoaded(false);
       return;
     }
     setCaseGraphLoaded(false);
-    const view = currentActor?.role === "auditor" ? "auditor" : "agent";
     api<{ id: string; manifest_hash: string }>("/api/v1/snapshots", {
       method: "POST",
       body: JSON.stringify({
         case_id: focus,
-        actor_id: actorId,
+        actor_id: DECAGON_READER,
         as_of: asOf,
         mode,
       }),
     })
       .then(async (snapshot) => {
         const snapGraph = await api<{ nodes: GraphNode[]; edges: GraphEdge[] }>(
-          `/api/v1/snapshots/${snapshot.id}/graph?view=${view}`
+          `/api/v1/snapshots/${snapshot.id}/graph?view=agent`
         );
 
         setCaseNodes(snapGraph.nodes);
@@ -141,12 +121,12 @@ export default function HomePage() {
         setCaseEdges([]);
         setCaseGraphLoaded(true);
       });
-  }, [deepLinkReady, actorsReady, focus, actorId, asOf, mode]);
+  }, [deepLinkReady, focus, asOf, mode]);
 
   // Select a deep-linked node only after confirming it is visible in the selected graph.
   useEffect(() => {
     const nodeId = requestedNodeId.current;
-    if (!nodeId || !deepLinkReady || !actorsReady) return;
+    if (!nodeId || !deepLinkReady) return;
     if (focus) {
       if (!caseGraphLoaded) return;
       requestedNodeId.current = null;
@@ -162,7 +142,7 @@ export default function HomePage() {
       setSelected(nodeId);
       setInspectorOpen(true);
     }
-  }, [deepLinkReady, actorsReady, focus, caseGraphLoaded, caseNodes, graph]);
+  }, [deepLinkReady, focus, caseGraphLoaded, caseNodes, graph]);
 
   const activeNodes = useMemo(() => {
     if (focus && caseNodes.length > 0) return caseNodes;
@@ -186,7 +166,7 @@ export default function HomePage() {
   const inspectorNodes =
     currentNode && !activeNodes.some((item) => item.id === currentNode.id) ? graph?.nodes || activeNodes : activeNodes;
   const inspectorEdges = inspectorNodes === activeNodes ? activeEdges : graph?.edges || activeEdges;
-  const nodeSummary = useNodeSummary(currentNode?.id || null, actorId, asOf, mode, "all");
+  const nodeSummary = useNodeSummary(currentNode?.id || null, DECAGON_READER, asOf, mode, DECAGON_ORG);
   const focusedCase = (graph?.cases || []).find((item) => item.id === focus) || null;
   const links = currentNode ? linkedRecords(currentNode, inspectorNodes, inspectorEdges) : [];
   const gap = currentNode ? amountGap(currentNode.amount, links.filter((item) => item.edge.type === "CONTRADICTS").map((item) => item.node?.amount)) : null;
@@ -235,7 +215,7 @@ export default function HomePage() {
     setOpenSuggestionId(null);
     setStreamNodeId(null);
     setCustomRootId(null);
-  }, [actorId, asOf, mode]);
+  }, [asOf, mode]);
 
   useEffect(() => {
     if (!investigating) return;
@@ -283,13 +263,12 @@ export default function HomePage() {
     const started = Date.now();
     let nextSteps = result.steps;
     try {
-      const view = currentActor?.role === "auditor" ? "auditor" : "agent";
       const params = new URLSearchParams({
-        organization_id: "all",
-        actor_id: actorId,
+        organization_id: DECAGON_ORG,
+        actor_id: DECAGON_READER,
         as_of: asOf,
         mode,
-        view,
+        view: "agent",
         node_id: nodeId,
       });
       const narrated = await api<{ narrated: boolean; steps: InvestigationStep[] }>(`/api/v1/company-graph/investigate?${params}`, {
@@ -770,10 +749,10 @@ export default function HomePage() {
       {previewId ? (
         <DocumentPreview
           versionId={previewId}
-          actorId={actorId}
+          actorId={DECAGON_READER}
           asOf={asOf}
           mode={mode}
-          organizationId="all"
+          organizationId={DECAGON_ORG}
           onClose={() => setPreviewId(null)}
         />
       ) : null}
