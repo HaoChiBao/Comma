@@ -19,7 +19,7 @@ export default function HomePage() {
   const [actorId, setActorId] = useState("actor-maya");
   const [asOf, setAsOf] = useState(PRESETS[1].asOf);
   const [mode, setMode] = useState("audit");
-  const [viewMode, setViewMode] = useState<"web" | "atom" | "structure">("web");
+  const [viewMode, setViewMode] = useState<"web" | "atom">("web");
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const [customRootId, setCustomRootId] = useState<string | null>(null);
@@ -138,7 +138,7 @@ export default function HomePage() {
 
   return (
     <main className="fullscreen-workspace">
-      {/* 1. Fullscreen Canvas Graph (Atom Network or Structured Ring Layout) */}
+      {/* 1. Fullscreen Canvas Graph (Interactive Flow or Atom Network) */}
       <section className="fullscreen-stage">
         <EvidenceGraph
           nodes={activeNodes}
@@ -213,9 +213,9 @@ export default function HomePage() {
             <button
               className={viewMode === "web" ? "primary" : ""}
               onClick={() => setViewMode("web")}
-              title="Progressive web expansion (Click nodes to unfold connections)"
+              title="Step-by-step interactive flow graph"
             >
-              Web
+              Flow
             </button>
             <button
               className={viewMode === "atom" ? "primary" : ""}
@@ -223,13 +223,6 @@ export default function HomePage() {
               title="3D rotating atom graph"
             >
               Atom
-            </button>
-            <button
-              className={viewMode === "structure" ? "primary" : ""}
-              onClick={() => setViewMode("structure")}
-              title="Structured ring layout"
-            >
-              Ring
             </button>
           </div>
 
