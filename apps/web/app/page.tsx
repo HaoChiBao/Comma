@@ -17,7 +17,7 @@ export default function HomePage() {
   const [actorId, setActorId] = useState("actor-maya");
   const [asOf, setAsOf] = useState(PRESETS[1].asOf);
   const [mode, setMode] = useState("audit");
-  const [viewMode, setViewMode] = useState<"network" | "structure">("network");
+  const [viewMode, setViewMode] = useState<"web" | "atom" | "structure">("web");
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const [caseNodes, setCaseNodes] = useState<GraphNode[]>([]);
@@ -300,9 +300,16 @@ export default function HomePage() {
 
           <div className="presets" role="group" aria-label="View mode">
             <button
-              className={viewMode === "network" ? "primary" : ""}
-              onClick={() => setViewMode("network")}
-              title="Atom-style interconnected graph"
+              className={viewMode === "web" ? "primary" : ""}
+              onClick={() => setViewMode("web")}
+              title="Progressive web expansion (Click nodes to unfold connections)"
+            >
+              Web
+            </button>
+            <button
+              className={viewMode === "atom" ? "primary" : ""}
+              onClick={() => setViewMode("atom")}
+              title="3D rotating atom graph"
             >
               Atom
             </button>
@@ -311,7 +318,7 @@ export default function HomePage() {
               onClick={() => setViewMode("structure")}
               title="Structured ring layout"
             >
-              Structure
+              Ring
             </button>
           </div>
 

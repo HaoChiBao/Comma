@@ -996,3 +996,120 @@ h1, h2, h3 {
 .warn { color: #D97706; }
 .bad { color: var(--red); }
 .ok { color: var(--green); }
+
+/* RADIAL EXPANSION WEB GRAPH */
+.radial-web-container {
+  width: 100vw;
+  height: 100vh;
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  background: var(--bg);
+  cursor: grab;
+  user-select: none;
+}
+.radial-web-container:active {
+  cursor: grabbing;
+}
+
+.radial-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.radial-web-toolbar {
+  position: absolute;
+  top: 76px;
+  left: 24px;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  pointer-events: auto;
+}
+
+.web-btn {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  transition: all 120ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.web-btn:hover:not(:disabled) {
+  background: #FFFFFF;
+  border-color: var(--orange);
+  color: var(--orange);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+}
+.web-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.web-pill {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.web-toast {
+  position: absolute;
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  background: #0D0D0C;
+  color: #FFFFFF;
+  font-size: 0.82rem;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  animation: fadeInDown 200ms ease;
+  pointer-events: none;
+}
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.radial-node-group:hover text {
+  fill: #0D0D0C;
+  font-weight: 700;
+}
+
+.radial-node-label {
+  pointer-events: none;
+  user-select: none;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radial-node-group, .radial-node-group line {
+    transition: none !important;
+  }
+}

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GraphEdge, GraphNode } from "@/lib/api";
 import { ObsidianGraph } from "@/components/ObsidianGraph";
+import { RadialWebGraph } from "@/components/RadialWebGraph";
 
 type Point = { x: number; y: number };
 type Label = { id: string; x: number; y: number };
@@ -12,21 +13,31 @@ export function EvidenceGraph({
   edges,
   selected,
   focused,
-  viewMode,
+  viewMode = "web",
   onSelect,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   selected: string | null;
   focused?: string | null;
-  viewMode?: "network" | "structure";
+  viewMode?: "web" | "atom" | "structure";
   onSelect: (id: string) => void;
 }) {
-  const isNetwork = viewMode ? viewMode === "network" : nodes.length > 30;
-  if (isNetwork) {
+  if (viewMode === "structure") {
+    return <CardGraph nodes={nodes} edges={edges} selected={selected} focused={focused} onSelect={onSelect} />;
+  }
+  if (viewMode === "atom") {
     return <ObsidianGraph nodes={nodes} edges={edges} selected={selected} focused={focused} onSelect={onSelect} />;
   }
-  return <CardGraph nodes={nodes} edges={edges} selected={selected} focused={focused} onSelect={onSelect} />;
+  return (
+    <RadialWebGraph
+      nodes={nodes}
+      edges={edges}
+      rootId={focused ? (focused === "CASE-011" ? "cell:D3" : undefined) : selected}
+      selected={selected}
+      onSelect={onSelect}
+    />
+  );
 }
 
 function CardGraph({
