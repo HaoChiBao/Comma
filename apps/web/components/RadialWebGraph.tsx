@@ -433,7 +433,6 @@ export function RadialWebGraph({
     if (!selected || !rootId || visibleIds.size === 0 || !nodeMap.has(selected)) return;
     if (visibleIds.has(selected)) return;
     if (upstreamTrail.includes(selected)) return;
-    if (siblingAlternatives.some((item) => item.id === selected)) return;
 
     const visibleGroup = (nodeId: string) => groupIdForMember(nodeId, groupNodes, visibleIds);
 
@@ -487,7 +486,6 @@ export function RadialWebGraph({
     nodeMap,
     onRootChange,
     upstreamTrail,
-    siblingAlternatives,
   ]);
 
   // Stable Directional Tree Layout (Anchored Root, Zero Vertical Shift on Expand)
@@ -867,7 +865,7 @@ export function RadialWebGraph({
     const pad = 28;
     const top = 132;
     const right = 400;
-    const bottom = siblingAlternatives.length > 0 ? 128 : pad;
+    const bottom = pad;
     const availW = Math.max(220, dimensions.w - right - pad * 2);
     const availH = Math.max(220, dimensions.h - top - bottom);
     const contentW = Math.max(48, maxX - minX);
@@ -883,7 +881,7 @@ export function RadialWebGraph({
       x: visibleCenterX - dimensions.w / 2 - midX * k,
       y: visibleCenterY - dimensions.h / 2 - midY * k,
     });
-  }, [treeNodes, upstreamNodes, siblingAlternatives.length, dimensions.w, dimensions.h, selected]);
+  }, [treeNodes, upstreamNodes, dimensions.w, dimensions.h, selected]);
 
   // Stable, Calm Camera Framing: keeps root anchored on the left without jarring whip-pans.
   // A Center click holds this camera until the selection changes.
