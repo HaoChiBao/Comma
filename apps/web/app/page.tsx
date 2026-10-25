@@ -215,6 +215,10 @@ export default function HomePage() {
   const currentNode = activeNodes.find((item) => item.id === selected) || null;
 
   function handleSelectNode(nodeId: string) {
+    if (!nodeId) {
+      setSelected(null);
+      return;
+    }
     setSelected(nodeId);
     setInspectorOpen(true);
   }
@@ -313,7 +317,12 @@ export default function HomePage() {
 
           <button
             className={inspectorOpen ? "primary" : ""}
-            onClick={() => setInspectorOpen((prev) => !prev)}
+            onClick={() => {
+              setInspectorOpen((prev) => {
+                if (prev) setSelected(null);
+                return !prev;
+              });
+            }}
             title="Toggle Details Drawer"
           >
             {inspectorOpen ? "✕ Close" : "◨ Details"}
@@ -342,7 +351,10 @@ export default function HomePage() {
                 </div>
                 <button
                   className="inspector-close-btn"
-                  onClick={() => setInspectorOpen(false)}
+                  onClick={() => {
+                    setInspectorOpen(false);
+                    setSelected(null);
+                  }}
                   title="Collapse inspector"
                 >
                   ✕

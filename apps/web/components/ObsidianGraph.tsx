@@ -79,8 +79,7 @@ export function ObsidianGraph({
   const simAlpha = useRef<number>(1.0);
   const isDraggingNode = useRef<string | null>(null);
   const isRotating = useRef<{ startX: number; startY: number; startRotY: number; startRotX: number; startPanX: number; startPanY: number; isPan: boolean } | null>(null);
-  const isHoveredCanvas = useRef<boolean>(false);
-  const hoverRef = useRef<string | null>(null);
+  const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
 
   const [hover, setHover] = useState<string | null>(null);
 
@@ -214,9 +213,8 @@ export function ObsidianGraph({
       if (!ctx) return;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 
-      // Slow continuous 360-degree rotation (stops immediately when user hovers canvas or a node)
-      const isHovering = isHoveredCanvas.current || hoverRef.current !== null || Boolean(hover);
-      if (camera.current.autoRotate && !isRotating.current && !isDraggingNode.current && !isHovering) {
+      // Slow continuous 360-degree rotation (stops ONLY when a node is clicked/selected or user is dragging)
+      if (camera.current.autoRotate && !isRotating.current && !isDraggingNode.current && !selected) {
         camera.current.rotY += 0.0016; // ~1 full rotation every 65 seconds
       }
 
@@ -323,6 +321,7 @@ export function ObsidianGraph({
         ref={canvas}
         aria-label="3D rotating atom graph"
         onPointerDown={(event) => {
+          pointerDownPos.current = { x: event.clientX, y: event.clientY };
           const hitNode = findNodeAtScreen(event.clientX, event.clientY);
           if (hitNode) {
             isDraggingNode.current = hitNode.id;
@@ -385,20 +384,23 @@ export function ObsidianGraph({
             return;
           }
 
-          isHoveredCanvas.current = true;
           const hitNode = findNodeAtScreen(event.clientX, event.clientY);
-          hoverRef.current = hitNode ? hitNode.id : null;
           setHover(hitNode ? hitNode.id : null);
         }}
-        onPointerEnter={() => {
-          isHoveredCanvas.current = true;
-        }}
         onPointerLeave={() => {
-          isHoveredCanvas.current = false;
-          hoverRef.current = null;
           setHover(null);
         }}
         onPointerUp={(event) => {
+          if (pointerDownPos.current) {
+            const dist = Math.hypot(event.clientX - pointerDownPos.current.x, event.clientY - pointerDownPos.current.y);
+            if (dist < 6 && !isDraggingNode.current) {
+              const hitNode = findNodeAtScreen(event.clientX, event.clientY);
+              if (!hitNode && selected) {
+                // Clicked on empty space: deselect so rotation resumes!
+                onSelect("");
+              }
+            }
+          }
           if (isDraggingNode.current) {
             simAlpha.current = Math.max(simAlpha.current, 0.2);
             isDraggingNode.current = null;
