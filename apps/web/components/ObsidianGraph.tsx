@@ -77,6 +77,17 @@ export function ObsidianGraph({
   });
 
   const simAlpha = useRef<number>(1.0);
+  const aim = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!selected) {
+      aim.current = null;
+      return;
+    }
+    const body = bodies.current.find((node) => node.id === selected);
+    if (!body) return;
+    aim.current = Math.PI - Math.atan2(body.x, body.z);
+  }, [selected]);
   const isDraggingNode = useRef<string | null>(null);
   const isRotating = useRef<{ startX: number; startY: number; startRotY: number; startRotX: number; startPanX: number; startPanY: number; isPan: boolean } | null>(null);
   const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
@@ -213,8 +224,11 @@ export function ObsidianGraph({
       if (!ctx) return;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 
-      // Slow continuous 360-degree rotation (stops ONLY when a node is clicked/selected or user is dragging)
-      if (camera.current.autoRotate && !isRotating.current && !isDraggingNode.current && !selected) {
+      if (aim.current != null && !isRotating.current && !isDraggingNode.current) {
+        const delta = Math.atan2(Math.sin(aim.current - camera.current.rotY), Math.cos(aim.current - camera.current.rotY));
+        if (Math.abs(delta) < 0.02) aim.current = null;
+        else camera.current.rotY += delta * 0.12;
+      } else if (camera.current.autoRotate && !isRotating.current && !isDraggingNode.current && !selected) {
         camera.current.rotY += 0.0016; // ~1 full rotation every 65 seconds
       }
 

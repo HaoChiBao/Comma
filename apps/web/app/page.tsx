@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { DocumentPreview } from "@/components/DocumentPreview";
 import { EvidenceGraph } from "@/components/EvidenceGraph";
+import { NodeSummary, useNodeSummary } from "@/components/NodeSummary";
 import { IngestModal, type IngestJob } from "@/components/IngestModal";
 import { API_URL, api, type ActorRow, type CompanyDocument, type CompanyGraph, type GraphEdge, type GraphNode } from "@/lib/api";
 
@@ -29,6 +31,7 @@ export default function HomePage() {
   const [job, setJob] = useState<IngestJob | null>(null);
   const [pulse, setPulse] = useState(0);
   const [query, setQuery] = useState("");
+  const [previewId, setPreviewId] = useState<string | null>(null);
 
   // 1. Fetch available actors
   useEffect(() => {
@@ -214,6 +217,7 @@ export default function HomePage() {
   }, [focus, caseEdges, activeNodes, graph?.edges]);
 
   const currentNode = activeNodes.find((item) => item.id === selected) || null;
+  const nodeSummary = useNodeSummary(currentNode?.id || null, actorId, asOf, mode, organizationId);
 
   function handleSelectNode(nodeId: string) {
     if (!nodeId) {
@@ -222,6 +226,12 @@ export default function HomePage() {
     }
     setSelected(nodeId);
     setInspectorOpen(true);
+  }
+
+  function openSummaryNode(nodeId: string) {
+    const node = graph?.nodes.find((item) => item.id === nodeId);
+    if (focus && node && node.case_id !== focus && node.group !== focus) setFocus(null);
+    handleSelectNode(nodeId);
   }
 
   return (
@@ -412,9 +422,14 @@ export default function HomePage() {
                 {currentNode.label}
               </div>
 
-              <p className="header-summary" style={{ margin: "0.2rem 0 0.5rem" }}>
-                {currentNode.title || currentNode.text || "Evidence record available in company graph."}
-              </p>
+              <div className="header-summary" style={{ margin: "0.2rem 0 0.5rem" }}>
+                <NodeSummary
+                  summary={nodeSummary.summary}
+                  error={nodeSummary.error}
+                  nodes={graph?.nodes || []}
+                  onOpen={openSummaryNode}
+                />
+              </div>
 
               {/* Formula Callout Box: ONLY shown if inspecting an Excel formula cell / accrual decision */}
               {(currentNode.id.includes("cell:") ||
@@ -493,6 +508,11 @@ export default function HomePage() {
                   </tr>
                 </tbody>
               </table>
+              {currentNode.version_id && !currentNode.redacted ? (
+                <button className="preview-open" onClick={() => setPreviewId(currentNode.version_id)}>
+                  Preview document
+                </button>
+              ) : null}
             </div>
 
             {/* Upstream / Downstream Graph Relationships */}
@@ -657,6 +677,7 @@ export default function HomePage() {
                   onClick={() => {
                     const match = activeNodes.find((n) => n.version_id === doc.version_id || n.label === doc.id);
                     if (match) setSelected(match.id);
+                    setPreviewId(doc.version_id);
                   }}
                 >
                   <strong>{doc.id}</strong>
@@ -689,18 +710,18 @@ export default function HomePage() {
           setOpen(true);
         }}
       />
+      {previewId ? (
+        <DocumentPreview
+          versionId={previewId}
+          actorId={actorId}
+          asOf={asOf}
+          mode={mode}
+          organizationId={organizationId}
+          onClose={() => setPreviewId(null)}
+        />
+      ) : null}
     </main>
   );
-}
-
-function linksFor(graph: CompanyGraph | null, selected: string | null) {
-  if (!graph || !selected) return [];
-  return graph.edges.filter((edge) => edge.source === selected || edge.target === selected);
-}
-
-function otherEnd(graph: CompanyGraph | null, selected: string | null, edge: { source: string; target: string }) {
-  const id = edge.source === selected ? edge.target : edge.source;
-  return graph?.nodes.find((node) => node.id === id)?.label || id;
 }
 
 function filteredDocuments(graph: CompanyGraph | null, query: string) {

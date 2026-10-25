@@ -74,6 +74,51 @@ def company_graph_route(
     return company_graph(db, organization_id, actor_id, utc(as_of), mode, view or None)
 
 
+@router.get("/company-graph/summary")
+def company_node_summary(
+    node_id: str,
+    organization_id: str = "org-decagon",
+    actor_id: str = "actor-decagon-finance",
+    as_of: str = "2025-12-15T12:00:00+00:00",
+    mode: str = "audit",
+    view: str = "",
+    db: Session = Depends(db_session),
+):
+    from fastapi import HTTPException
+
+    from app.company_graph import company_graph
+    from app.ingest.decagon import ensure_company
+    from app.models import ArtifactVersion
+    from app.node_summary import reading_ids, summarize_node
+
+    if organization_id == "org-decagon":
+        ensure_company(db)
+    graph = company_graph(db, organization_id, actor_id, utc(as_of), mode, view or None)
+    version_ids = [item.removeprefix("artifact:") for item in reading_ids(graph, node_id)]
+    texts = {}
+    if version_ids:
+        rows = db.scalars(select(ArtifactVersion).where(ArtifactVersion.id.in_(version_ids))).all()
+        texts = {f"artifact:{row.id}": row.content_text or "" for row in rows}
+    summary = summarize_node(graph, node_id, texts)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="This node is not in the snapshot.")
+    return summary
+
+
+@router.get("/company-graph/documents/{version_id}")
+def company_document_preview(
+    version_id: str,
+    organization_id: str = "org-decagon",
+    actor_id: str = "actor-decagon-finance",
+    as_of: str = "2025-12-15T12:00:00+00:00",
+    mode: str = "audit",
+    db: Session = Depends(db_session),
+):
+    from app.company_graph import preview_document
+
+    return preview_document(db, organization_id, actor_id, utc(as_of), mode, version_id)
+
+
 @router.get("/cases")
 def list_cases(db: Session = Depends(db_session)):
     cases = db.scalars(select(Case).order_by(Case.id)).all()

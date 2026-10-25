@@ -123,6 +123,50 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
     }
 
 
+def preview_document(db: Session, organization_id: str, actor_id: str, as_of: datetime, mode: str, version_id: str) -> dict:
+    """Full text of one document that this actor can already see. A hidden document returns no text."""
+    if mode not in {"audit", "pre_decision"}:
+        raise AccessError("NOT_IN_SNAPSHOT")
+    actor = get_actor(db, actor_id)
+    if actor.organization_id != organization_id:
+        raise AccessError("OUTSIDE_ORGANIZATION")
+    version = db.scalar(
+        select(ArtifactVersion)
+        .join(SourceArtifact)
+        .where(ArtifactVersion.id == version_id, SourceArtifact.organization_id == organization_id)
+        .options(selectinload(ArtifactVersion.artifact), selectinload(ArtifactVersion.grants), selectinload(ArtifactVersion.facts))
+    )
+    if version is None:
+        raise AccessError("NOT_IN_SNAPSHOT")
+    hidden = set()
+    if mode == "pre_decision":
+        hidden = set(
+            db.scalars(select(Case.decision_version_id).where(Case.organization_id == organization_id, Case.decision_version_id.is_not(None))).all()
+        )
+    reason = exclusion_reason(
+        version,
+        version.grants,
+        organization_id=organization_id,
+        role=actor.role,
+        as_of=as_of,
+        mode=mode,
+        hidden_version_ids=hidden,
+    )
+    if reason:
+        raise AccessError(reason)
+    amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
+    return {
+        "id": version.artifact.external_id,
+        "version_id": version.id,
+        "title": version.artifact.title,
+        "kind": version.artifact.kind,
+        "amount": money(amount),
+        "available_from": version.available_from.isoformat() if version.available_from else None,
+        "document_date": version.document_date.isoformat() if version.document_date else None,
+        "text": version.content_text,
+    }
+
+
 def _document(version: ArtifactVersion, case_ids: list[str], on_graph: bool) -> dict:
     amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
     return {

@@ -62,3 +62,23 @@ def test_decagon_analysis_hides_the_invoice_until_december():
     legal_ids = {node["label"] for node in legal.json()["nodes"]}
     assert "CTR-0007" in legal_ids
     assert "CTR-0007" not in finance_ids
+    invoice = next(node for node in later["nodes"] if node["label"] == "INV-C01-381")
+    visible = api.get(
+        f"/api/v1/company-graph/documents/{invoice['version_id']}",
+        params={"actor_id": "actor-decagon-finance", "as_of": "2025-12-15T12:00:00+00:00", "mode": "audit"},
+    )
+    assert visible.status_code == 200, visible.text
+    assert "158.00" in visible.json()["text"]
+    hidden = api.get(
+        f"/api/v1/company-graph/documents/{invoice['version_id']}",
+        params={"actor_id": "actor-decagon-finance", "as_of": "2025-09-30T23:59:00+00:00", "mode": "audit"},
+    )
+    assert hidden.status_code == 403
+    assert "158" not in hidden.text
+    restricted = next(node for node in legal.json()["nodes"] if node["label"] == "CTR-0007")
+    blocked = api.get(
+        f"/api/v1/company-graph/documents/{restricted['version_id']}",
+        params={"actor_id": "actor-decagon-finance", "as_of": "2025-09-30T23:59:00+00:00", "mode": "audit"},
+    )
+    assert blocked.status_code == 403
+    assert "2100" not in blocked.text

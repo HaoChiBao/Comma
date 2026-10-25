@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { DocumentPreview } from "@/components/DocumentPreview";
 import { EvidenceGraph } from "@/components/EvidenceGraph";
+import { NodeSummary, useNodeSummary } from "@/components/NodeSummary";
 import { api, type ActorRow, type CaseRow, type GraphEdge, type GraphNode } from "@/lib/api";
 import { accountantId } from "@/lib/caseActors";
 
@@ -21,6 +23,7 @@ export default function CasePage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [documentText, setDocumentText] = useState("");
+  const [previewId, setPreviewId] = useState<string | null>(null);
 
   useEffect(() => {
     api<CaseRow>(`/api/v1/cases/${caseId}`)
@@ -56,6 +59,13 @@ export default function CasePage() {
 
   const current = nodes.find((node) => node.id === selected) || null;
   const actor = actors.find((person) => person.id === actorId);
+  const nodeSummary = useNodeSummary(
+    current?.id || null,
+    actorId,
+    `${day}T23:59:00+00:00`,
+    mode,
+    item?.organization_id || actor?.organization_id || "",
+  );
 
   useEffect(() => {
     if (!current || current.redacted || !snapshotId) {
@@ -119,6 +129,9 @@ export default function CasePage() {
         <EvidenceGraph nodes={nodes} edges={edges} selected={selected} onSelect={setSelected} />
         <aside className="panel inspector">
           <h2>{current?.redacted ? "Blocked" : current?.amount ? `$${current.amount}` : "Select a node"}</h2>
+          {current ? (
+            <NodeSummary summary={nodeSummary.summary} error={nodeSummary.error} nodes={nodes} onOpen={setSelected} />
+          ) : null}
           <dl>
             <dt>Relationship</dt>
             <dd>{edges.find((edge) => edge.source === selected || edge.target === selected)?.type || "None selected"}</dd>
@@ -129,12 +142,27 @@ export default function CasePage() {
             <dt>Document date</dt>
             <dd>{current?.document_date || "Hidden"}</dd>
             <dt>Source</dt>
-            <dd>{documentText || "Choose a visible node."}</dd>
+            <dd>
+              {documentText || "Choose a visible node."}
+              {current?.version_id && !current.redacted ? (
+                <button className="preview-open" onClick={() => setPreviewId(current.version_id)}>Preview document</button>
+              ) : null}
+            </dd>
             <dt>Snapshot</dt>
             <dd>{hash ? hash.slice(0, 12) : "…"}</dd>
           </dl>
         </aside>
       </div>
+      {previewId && actorId ? (
+        <DocumentPreview
+          versionId={previewId}
+          actorId={actorId}
+          asOf={`${day}T23:59:00+00:00`}
+          mode={mode}
+          organizationId={item?.organization_id}
+          onClose={() => setPreviewId(null)}
+        />
+      ) : null}
     </main>
   </div>
   );
