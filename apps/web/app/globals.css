@@ -782,7 +782,7 @@ h1, h2, h3 {
 }
 
 .link-list {
-  max-height: 200px;
+  max-height: 240px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -800,6 +800,83 @@ h1, h2, h3 {
   color: var(--muted);
   font-size: 0.74rem;
   margin-top: 0.2rem;
+}
+
+.rel-card-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.65rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 120ms ease;
+  width: 100%;
+}
+.rel-card-btn:hover {
+  background: #FFFFFF;
+  border-color: var(--orange);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+}
+.rel-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+}
+.rel-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+.rel-badge.contradicts {
+  background: rgba(250, 102, 16, 0.12);
+  color: #D9480F;
+}
+.rel-badge.reconciles_with {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+.rel-badge.mentions, .rel-badge.cites {
+  background: rgba(37, 99, 235, 0.10);
+  color: #2563EB;
+}
+.rel-badge.derived_from {
+  background: rgba(139, 92, 246, 0.12);
+  color: #7C3AED;
+}
+.rel-badge.ambiguous, .rel-badge.attached, .rel-badge.source_candidate {
+  background: rgba(100, 116, 139, 0.12);
+  color: #475569;
+}
+.rel-other-label {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text);
+}
+.rel-amt {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.75rem;
+}
+.rel-expl {
+  font-size: 0.73rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.empty-rel-box {
+  background: var(--panel-2);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 0.78rem;
 }
 
 /* CIRCULAR RING NODE DESIGN (For Structured Mode) */

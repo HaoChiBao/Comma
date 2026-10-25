@@ -332,207 +332,282 @@ export default function HomePage() {
 
       {/* 3. Floating Collapsible Inspector Sidebar */}
       <aside className={`floating-inspector${inspectorOpen ? "" : " collapsed"}`}>
-        {/* Cell / Case Header */}
-        <div className="sidebar-header">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div className="cell-eyebrow">
-              {focus === "CASE-011"
-                ? "Accruals!D3 · Cloud Services Inc."
-                : focus
-                ? `${focus} · ${graph?.cases.find((c) => c.id === focus)?.vendor || "Case"}`
-                : "Company Knowledge Graph"}
-            </div>
-            <button
-              className="inspector-close-btn"
-              onClick={() => setInspectorOpen(false)}
-              title="Collapse inspector"
-            >
-              ✕
-            </button>
-          </div>
-
-          <div className="header-amount-row">
-            <span className="amount">
-              {focus === "CASE-011"
-                ? "$150.00"
-                : currentNode?.amount
-                ? `$${currentNode.amount}`
-                : "$150.00"}
-            </span>
-            <span className="status-badge needs-review">
-              <span className="status-dot orange" />
-              Needs review
-            </span>
-          </div>
-
-          <p className="header-summary">
-            {focus === "CASE-011"
-              ? "$10.00 below the vendor's Sep 26 estimate. The PO agrees with the cell; the email doesn't."
-              : currentNode?.text || "Trace every decision to what was knowable at the time."}
-          </p>
-
-          {/* Formula Callout Box */}
-          <div className="formula-box">
-            <span className="label">Formula</span>
-            <span className="code">=B3+C3</span>
-            <span className="calc">$100.00 + $50.00 = $150.00</span>
-          </div>
-        </div>
-
-        {/* Selected Evidence Card */}
         {currentNode ? (
-          <div className="evidence-card">
-            <div className="evidence-card-header">
-              <div className="evidence-title-group">
-                <span className={`status-dot ${currentNode.redacted ? "grey" : "orange"}`} />
-                <span className="evidence-code">
-                  {currentNode.redacted ? "INV-104 (Withheld)" : currentNode.label}
+          <>
+            {/* Node Context & Header */}
+            <div className="sidebar-header">
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div className="cell-eyebrow">
+                  {currentNode.type.replace(/_/g, " ")} · {currentNode.case_id || currentNode.group || "Company Evidence"}
+                </div>
+                <button
+                  className="inspector-close-btn"
+                  onClick={() => setInspectorOpen(false)}
+                  title="Collapse inspector"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="header-amount-row">
+                <span className="amount">
+                  {currentNode.redacted
+                    ? "Withheld"
+                    : currentNode.amount
+                    ? `$${currentNode.amount}`
+                    : "Reference"}
                 </span>
-                <span className="evidence-kind">
-                  {currentNode.type.toLowerCase().replace("_", " ")}
+
+                {currentNode.redacted ? (
+                  <span className="status-badge" style={{ color: "#94A3B8" }}>
+                    <span className="status-dot grey" />
+                    Withheld at Close
+                  </span>
+                ) : activeEdges.some((e) => (e.source === currentNode.id || e.target === currentNode.id) && e.type === "CONTRADICTS") ? (
+                  <span className="status-badge needs-review">
+                    <span className="status-dot orange" />
+                    Conflicts ($10 diff)
+                  </span>
+                ) : activeEdges.some((e) => (e.source === currentNode.id || e.target === currentNode.id) && e.type === "RECONCILES_WITH") ? (
+                  <span className="status-badge verified">
+                    <span className="status-dot green" />
+                    Verified Match
+                  </span>
+                ) : currentNode.type === "DECISION" ? (
+                  <span className="status-badge">
+                    <span className="status-dot black" />
+                    Recorded Accrual
+                  </span>
+                ) : (
+                  <span className="status-badge" style={{ color: "var(--muted)" }}>
+                    <span className="status-dot green" />
+                    Available Evidence
+                  </span>
+                )}
+              </div>
+
+              <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "var(--text)", margin: "0.15rem 0" }}>
+                {currentNode.label}
+              </div>
+
+              <p className="header-summary" style={{ margin: "0.2rem 0 0.5rem" }}>
+                {currentNode.title || currentNode.text || "Evidence record available in company graph."}
+              </p>
+
+              {/* Formula Callout Box: ONLY shown if inspecting an Excel formula cell / accrual decision */}
+              {(currentNode.id.includes("cell:") ||
+                (focus === "CASE-011" && (currentNode.label === "D3" || currentNode.label.startsWith("JE")))) && (
+                <div className="formula-box">
+                  <span className="label">Formula</span>
+                  <span className="code">=B3+C3</span>
+                  <span className="calc">$100.00 + $50.00 = $150.00</span>
+                </div>
+              )}
+            </div>
+
+            {/* Evidence Document Metadata */}
+            <div className="evidence-card">
+              <div className="trace-title" style={{ marginBottom: "0.4rem" }}>
+                Document Details
+              </div>
+              <table className="meta-table">
+                <tbody>
+                  <tr>
+                    <td className="key">Type</td>
+                    <td className="val" style={{ textTransform: "capitalize" }}>
+                      {currentNode.type.toLowerCase().replace(/_/g, " ")}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="key">Knowable</td>
+                    <td className="val">
+                      {currentNode.available_from ? (
+                        <>
+                          <strong>{currentNode.available_from.slice(0, 10)}</strong>{" "}
+                          <span className="muted" style={{ fontSize: "0.72rem" }}>
+                            {currentNode.available_from > asOf
+                              ? "(Withheld: Future document)"
+                              : "(Available before close)"}
+                          </span>
+                        </>
+                      ) : (
+                        "Baseline record"
+                      )}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="key">Origin</td>
+                    <td className="val">
+                      {currentNode.origin === "vendor"
+                        ? "Vendor correspondence"
+                        : currentNode.origin === "formula"
+                        ? "Workbook cell formula"
+                        : currentNode.type === "EMAIL"
+                        ? "Inbound AP mailbox"
+                        : currentNode.type === "PURCHASE_ORDER"
+                        ? "ERP purchase order system"
+                        : "Company general ledger"}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="key">Audit Role</td>
+                    <td className="val">
+                      {currentNode.redacted
+                        ? "Withheld from accountant during close to prevent future leakage."
+                        : activeEdges.some((e) => (e.source === currentNode.id || e.target === currentNode.id) && e.type === "CONTRADICTS")
+                        ? "Flags discrepancy: Amount differs from related records naming the same transaction."
+                        : activeEdges.some((e) => (e.source === currentNode.id || e.target === currentNode.id) && e.type === "RECONCILES_WITH")
+                        ? "Reconciles and supports the recorded accrual entry."
+                        : "Ingested evidence record. Available to preparer prior to close."}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Upstream / Downstream Graph Relationships */}
+            <div>
+              <div className="trace-title">
+                Connected Evidence ({activeEdges.filter((e) => e.source === currentNode.id || e.target === currentNode.id).length})
+              </div>
+              <div className="link-list">
+                {activeEdges.filter((e) => e.source === currentNode.id || e.target === currentNode.id).length === 0 ? (
+                  <div className="empty-rel-box">
+                    <strong style={{ display: "block", marginBottom: "0.2rem" }}>Standalone Evidence</strong>
+                    <span className="muted">
+                      Ingested into the company knowledge base. Not directly cited or linked to a specific accrual journal entry.
+                    </span>
+                  </div>
+                ) : (
+                  activeEdges
+                    .filter((e) => e.source === currentNode.id || e.target === currentNode.id)
+                    .map((edge) => {
+                      const otherId = edge.source === currentNode.id ? edge.target : edge.source;
+                      const otherNode = activeNodes.find((n) => n.id === otherId);
+                      const otherLabel = otherNode?.label || otherId.replace(/^artifact:/, "").replace(/:v\d+$/, "");
+                      return (
+                        <button
+                          key={edge.id}
+                          className="rel-card-btn"
+                          onClick={() => handleSelectNode(otherId)}
+                          title={`Inspect ${otherLabel}`}
+                        >
+                          <div className="rel-card-header">
+                            <span className={`rel-badge ${edge.type.toLowerCase()}`}>
+                              {edge.type.replace(/_/g, " ")}
+                            </span>
+                            <span className="rel-other-label">{otherLabel}</span>
+                            {otherNode?.amount && <span className="rel-amt">${otherNode.amount}</span>}
+                          </div>
+                          {edge.explanation && (
+                            <div className="rel-expl">{edge.explanation}</div>
+                          )}
+                        </button>
+                      );
+                    })
+                )}
+              </div>
+            </div>
+
+            {/* Timeline Context */}
+            <div className="trace-section">
+              <div className="trace-title">Timeline Context</div>
+              <div className="trace-list">
+                {currentNode.case_id === "CASE-011" || focus === "CASE-011" ? (
+                  <>
+                    <div className="trace-item">
+                      <span className="trace-date">Sep 12</span>
+                      <span className="trace-marker"><span className="trace-dot green" /></span>
+                      <span className="trace-desc">PO-104 received</span>
+                      <span className="trace-amt">$150.00</span>
+                    </div>
+                    <div className="trace-item">
+                      <span className="trace-date">Sep 26</span>
+                      <span className="trace-marker"><span className="trace-dot orange" /></span>
+                      <span className="trace-desc">EM-208 received</span>
+                      <span className="trace-amt">$160.00</span>
+                    </div>
+                    <div className="trace-item">
+                      <span className="trace-date">Sep 30</span>
+                      <span className="trace-marker"><span className="trace-dot black" /></span>
+                      <span className="trace-desc">Books closed, accrual posted</span>
+                      <span className="trace-amt">$150.00</span>
+                    </div>
+                    {(asOf.includes("2025-12") || currentActor?.role === "auditor") && (
+                      <div className="trace-item">
+                        <span className="trace-date">Dec 10</span>
+                        <span className="trace-marker"><span className="trace-dot grey" /></span>
+                        <span className="trace-desc">
+                          {asOf.includes("2025-12") ? "INV-104 received" : "INV-104 (withheld)"}
+                        </span>
+                        <span className="trace-amt">
+                          {asOf.includes("2025-12") ? "$158.00" : "—"}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : currentNode.available_from ? (
+                  <>
+                    <div className="trace-item">
+                      <span className="trace-date">{currentNode.available_from.slice(5, 10).replace("-", " ")}</span>
+                      <span className="trace-marker"><span className="trace-dot green" /></span>
+                      <span className="trace-desc">Document knowable</span>
+                      <span className="trace-amt">{currentNode.amount ? `$${currentNode.amount}` : "—"}</span>
+                    </div>
+                    <div className="trace-item">
+                      <span className="trace-date">Sep 30</span>
+                      <span className="trace-marker"><span className="trace-dot black" /></span>
+                      <span className="trace-desc">Books close cutoff</span>
+                      <span className="trace-amt">{currentNode.available_from <= asOf ? "Visible" : "Withheld"}</span>
+                    </div>
+                    <div className="trace-item">
+                      <span className="trace-date">Dec 15</span>
+                      <span className="trace-marker"><span className="trace-dot grey" /></span>
+                      <span className="trace-desc">Post-close audit review</span>
+                      <span className="trace-amt">Verified</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="empty-rel-box">
+                    <span className="muted">Permanent baseline record in general ledger.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        ) : (
+          /* Empty / Default Overview State */
+          <div>
+            <div className="sidebar-header">
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div className="cell-eyebrow">
+                  {focus ? `${focus} · Overview` : "Company Knowledge Graph"}
+                </div>
+                <button
+                  className="inspector-close-btn"
+                  onClick={() => setInspectorOpen(false)}
+                  title="Collapse inspector"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="header-amount-row">
+                <span className="amount">{activeNodes.length} Nodes</span>
+                <span className="status-badge verified">
+                  <span className="status-dot green" />
+                  Active Corpus
                 </span>
               </div>
-              <span className="evidence-amount">
-                {currentNode.redacted ? "Withheld" : currentNode.amount ? `$${currentNode.amount}` : "—"}
-              </span>
-            </div>
 
-            <div className={currentNode.redacted ? "muted" : "evidence-conflict"}>
-              {currentNode.redacted
-                ? "Withheld until 10 Dec 2025"
-                : currentNode.label.includes("EM")
-                ? "Conflicts · $10.00 higher"
-                : currentNode.label.includes("PO")
-                ? "Agrees with cell · Supported"
-                : "Linked evidence"}
-            </div>
-
-            {/* Two-Column Metadata Table */}
-            <table className="meta-table">
-              <tbody>
-                <tr>
-                  <td className="key">From</td>
-                  <td className="val">
-                    {currentNode.label.includes("EM")
-                      ? "Billing, Cloud Services Inc."
-                      : currentNode.label.includes("PO")
-                      ? "Procurement, Acme Corp"
-                      : "Cloud Services Inc."}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="key">Received</td>
-                  <td className="val">
-                    {currentNode.available_from
-                      ? `${currentNode.available_from.slice(0, 10)}, ${
-                          currentNode.available_from.includes("09-25")
-                            ? "four days before close"
-                            : "verified"
-                        }`
-                      : "Recorded"}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="key">Says</td>
-                  <td className="val">
-                    {currentNode.label.includes("EM")
-                      ? "September usage estimate of $160.00"
-                      : currentNode.label.includes("PO")
-                      ? "Approved PO for $150.00 ($100 line 1 + $50 line 2)"
-                      : currentNode.text || currentNode.title}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="key">Link</td>
-                  <td className="val">
-                    {currentNode.label.includes("EM")
-                      ? "Possible: same vendor and month, not cited anywhere"
-                      : "Direct match: cited in workbook row 3"}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="key">Caveat</td>
-                  <td className="val">
-                    {currentNode.label.includes("EM")
-                      ? "We can't prove the preparer read it"
-                      : currentNode.redacted
-                      ? "Invoice arrived after books closed"
-                      : "Verified baseline document"}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-
-        {/* Upstream Link Relationships List */}
-        {selected && (
-          <div>
-            <div className="trace-title">Relationships</div>
-            <div className="link-list">
-              {linksFor(graph, selected).length === 0 ? (
-                <p className="muted" style={{ padding: "0.4rem 0" }}>
-                  No direct linked documents
-                </p>
-              ) : (
-                linksFor(graph, selected).map((edge) => (
-                  <p key={edge.id}>
-                    <strong>{edge.type}</strong> {otherEnd(graph, selected, edge)}
-                    <span>{edge.explanation}</span>
-                  </p>
-                ))
-              )}
+              <p className="header-summary">
+                {focus
+                  ? graph?.cases.find((c) => c.id === focus)?.finding || "Select any node in the graph to inspect evidence and relationships."
+                  : "Click any node in the 3D atom graph to inspect its evidence record, knowable timeline, and audit connections."}
+              </p>
             </div>
           </div>
         )}
-
-        {/* Trace Timeline */}
-        <div className="trace-section">
-          <div className="trace-title">Trace</div>
-          <div className="trace-list">
-            <div className="trace-item">
-              <span className="trace-date">Sep 12</span>
-              <span className="trace-marker">
-                <span className="trace-dot green" />
-              </span>
-              <span className="trace-desc">PO-104 received</span>
-              <span className="trace-amt">$150.00</span>
-            </div>
-
-            <div className="trace-item">
-              <span className="trace-date">Sep 26</span>
-              <span className="trace-marker">
-                <span className="trace-dot orange" />
-              </span>
-              <span className="trace-desc">EM-208 received</span>
-              <span className="trace-amt">$160.00</span>
-            </div>
-
-            <div className="trace-item">
-              <span className="trace-date">Sep 30</span>
-              <span className="trace-marker">
-                <span className="trace-dot black" />
-              </span>
-              <span className="trace-desc">Books closed, accrual posted</span>
-              <span className="trace-amt">$150.00</span>
-            </div>
-
-            {(asOf.includes("2025-12") || currentActor?.role === "auditor") && (
-              <div className="trace-item">
-                <span className="trace-date">Dec 10</span>
-                <span className="trace-marker">
-                  <span className="trace-dot grey" />
-                </span>
-                <span className="trace-desc">
-                  {asOf.includes("2025-12") ? "INV-104 received" : "INV-104 (withheld)"}
-                </span>
-                <span className="trace-amt">
-                  {asOf.includes("2025-12") ? "$158.00" : "—"}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
 
         {/* Document Search */}
         <div style={{ marginTop: "0.2rem" }}>
