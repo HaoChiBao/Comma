@@ -6,6 +6,7 @@ import { ResultView } from "./components/ResultView";
 import { SourcePanel } from "./components/SourcePanel";
 import { clearHighlight, markCells, settingsStore } from "./office/formatting";
 import { noteSettingsStore, writeCustomNote } from "./office/notes";
+import { reviewKey, reviewStateStore } from "./office/reviewed";
 import { readPrecedents, readSelectedCell, readSelection, readUsedRange, readWorkbookId, selectCell, supportsPrecedents, watchSelection, type RangeCells, type SelectionSummary } from "./office/selection";
 import { createClient, describeError } from "./services/worldstateApi";
 import type { Actor, AvailableEvidence, InspectRequest, ScanFinding, SourceDetail, Trace, TraceGraph } from "./types";
@@ -131,6 +132,7 @@ export function App() {
 
   const refreshFlags = React.useCallback(async (date: string, actor: string) => {
     try {
+      const reviewed = new Set(reviewStateStore().load());
       const result = await Excel.run(async (context) => {
         const workbookId = await readWorkbookId(context);
         const range = await readUsedRange(context);
@@ -140,7 +142,7 @@ export function App() {
           initialReviewHighlightsPending.current = true;
           try {
             const reviewMarks = scan.findings
-              .filter((finding) => finding.status === "review")
+              .filter((finding) => finding.status === "review" && !reviewed.has(reviewKey(finding.cell, date, actor)))
               .map((finding) => ({ key: finding.cell, status: finding.status }));
             await markCells(context, reviewMarks, settingsStore());
             initialReviewHighlightsDone.current = true;
@@ -151,7 +153,8 @@ export function App() {
         return { result: scan, range };
       });
       if (result.result && result.range) {
-        setFlagged(withVendor(result.result.findings, result.range.cells));
+        setFlagged(withVendor(result.result.findings, result.range.cells)
+          .filter((finding) => !reviewed.has(reviewKey(finding.cell, date, actor))));
         setScanNote(null);
         setBackend("ready");
       } else {
@@ -291,7 +294,7 @@ export function App() {
     return run("Adding note", async () => {
       const result = await Excel.run((context) => writeCustomNote(context, trace.cell.key, message, noteSettingsStore()));
       showNotice(result === "skipped"
-        ? "This cell already has a note that WorldState did not create; it was left unchanged."
+        ? "This cell already has a note that Comma did not create; it was left unchanged."
         : `${result === "written" ? "Added" : "Updated"} note on ${trace.cell.address}.`);
     });
   };
@@ -322,8 +325,11 @@ export function App() {
       return;
     }
     void run(label, async () => {
-      const cleared = await Excel.run((context) => clearHighlight(context, trace.cell.key, settingsStore()));
-      showNotice(cleared ? "Highlight cleared. Mark reviewed is not saved yet." : "No WorldState highlight to clear. Mark reviewed is not saved yet.");
+      await Excel.run((context) => clearHighlight(context, trace.cell.key, settingsStore()));
+      const reviewed = reviewStateStore();
+      await reviewed.save([...reviewed.load(), reviewKey(trace.cell.key, asOf, actorId)]);
+      await refreshFlags(asOf, actorId);
+      showNotice("Marked reviewed. This decision is saved in this workbook only.");
     });
   };
 
@@ -333,7 +339,7 @@ export function App() {
   return (
     <div className="ws">
       <header className="top">
-        <span className="brand">WorldState <span className={`dot ${backend}`} title={`API ${backend}`} /></span>
+        <img className="brand-logo" src="assets/comma-logo.png" alt="Comma" />
         <div className="top-controls">
           <label className="actor-select"><span className="sr-only">Viewing as</span>
             <select aria-label="Actor" value={actorId} onChange={(event) => changeActor(event.target.value)} disabled={!!busy || !actors.length}>
@@ -349,7 +355,7 @@ export function App() {
         {busy ? <p className="status">{busy}…</p> : null}
         {error ? <p className="inline-error" role="alert">{error}</p> : null}
         {notice ? <p className="notice" role="status" aria-live="polite">{notice}</p> : null}
-        {backend === "down" && !error ? <p className="inline-error" role="alert">WorldState API is not reachable. Your workbook was not changed.</p> : null}
+        {backend === "down" && !error ? <p className="inline-error" role="alert">Comma is not reachable. Your workbook was not changed.</p> : null}
 
         {phase === "idle" ? <IdleView
           selection={selection}

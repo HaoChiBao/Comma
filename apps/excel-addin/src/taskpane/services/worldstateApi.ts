@@ -17,15 +17,15 @@ export class ApiError extends Error {
 }
 
 const MESSAGES: Record<string, string> = {
-  BACKEND_UNAVAILABLE: "WorldState API is not reachable. Your workbook was not changed.",
+  BACKEND_UNAVAILABLE: "Comma is not reachable. Your workbook was not changed.",
   FUTURE_INFORMATION: "That source was not available to accounting at this date.",
   UNKNOWN_AVAILABILITY: "When that source became available is unknown, so it is withheld.",
   INSUFFICIENT_PERMISSION: "Your role cannot read that source at this date.",
   OUTSIDE_ORGANIZATION: "That workbook or source belongs to another organization.",
   NOT_IN_SNAPSHOT: "That source is not part of this snapshot.",
-  WORKBOOK_NOT_FOUND: "This workbook is not registered with WorldState.",
+  WORKBOOK_NOT_FOUND: "This workbook is not registered with Comma.",
   TRACE_NOT_FOUND: "That trace no longer exists. Inspect the cell again.",
-  INDEX_NOT_READY: "WorldState is still reading the company documents. Try again in a moment.",
+  INDEX_NOT_READY: "Comma is still reading the company documents. Try again in a moment.",
   INVALID_CELL: "Select a single cell.",
   RANGE_TOO_LARGE: "Select at most 200 cells to scan.",
 };

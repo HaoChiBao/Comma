@@ -8,11 +8,11 @@
 
 **1:55** Switch to 15 December 2025 as Jordan Hale. The invoice is now inside the snapshot. Auditor view on 30 September can show that later evidence exists, without the amount.
 
-**2:25** Open Before / after. The unrestricted baseline is marked unsafe and uses the $158 invoice. WorldState does not. Approve the proposal as the auditor. The audit log records the review. Nothing is posted to an ERP.
+**2:25** Open Before / after. The unrestricted baseline is marked unsafe and uses the $158 invoice. Comma does not. Approve the proposal as the auditor. The audit log records the review. Nothing is posted to an ERP.
 
 ## Excel version
 
-Setup: finish the company ingest, generate `fixtures/Decagon_Accruals.xlsx`, start the API and add-in dev server, then open the workbook in Excel with the WorldState pane sideloaded.
+Setup: finish the company ingest, generate `fixtures/Decagon_Accruals.xlsx`, start the API and add-in dev server, then open the workbook in Excel with the Comma pane sideloaded.
 
 **0:00** The idle view shows the current selection, an **Inspect** button, and cells flagged by a bounded scan of the active sheet. The generated `Accruals` sheet has ten September accruals. It leaves invoice amounts out because those invoices were not available at close.
 

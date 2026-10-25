@@ -53,11 +53,11 @@ The walkthrough is in `docs/DEMO_SCRIPT.md`. Limits are in `docs/ARCHITECTURE.md
 
 ## Excel add-in
 
-`apps/excel-addin` is a WorldState task pane for Excel. It uses Office.js with React and TypeScript, and is sideloaded rather than published. Its S2c layout presents the selected cell, the backend's finding, a compact formula view, a ring graph, source details, and a timeline of dates returned by the trace API. The pane adapts the existing inspect, scan, graph, and source responses; the API response contracts are unchanged.
+`apps/excel-addin` is the Comma task pane for Excel. It uses Office.js with React and TypeScript, and is sideloaded rather than published. Its S2c layout presents the selected cell, the backend's finding, a compact formula view, a ring graph, source details, and a timeline of dates returned by the trace API. The pane adapts the existing inspect, scan, graph, and source responses; the API response contracts are unchanged.
 
 The actor and **as of** controls run each trace against a sealed snapshot. The idle view lists flagged cells from a bounded scan of the active sheet. Select a cell and click **Inspect** to open its trace. Click an available source in the graph detail to open the source panel. Excluded sources remain generic and do not expose their amount, date, id, or text in the sidebar.
 
-The bounded scan of the active sheet highlights cells marked for review. **Mark reviewed** clears that cell's WorldState highlight. **Add a note** opens a composer for a custom native Excel note on the inspected cell; a note someone else wrote is left alone, and older Excel builds report when Notes are unavailable. These review actions are local to the workbook and are not saved to the backend.
+The bounded scan of the active sheet highlights cells marked for review. **Mark reviewed** clears the cell's Comma highlight and hides it from the flagged list for the current date and actor. That decision is stored in the workbook's add-in settings, not sent to the backend. **Add a note** opens a composer for a custom native Excel note on the inspected cell; a note someone else wrote is left alone, and older Excel builds report when Notes are unavailable.
 
 The add-in never writes values or formulas.
 
