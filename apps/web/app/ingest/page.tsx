@@ -67,7 +67,9 @@ export default function IngestPage() {
     <div className="shell">
       <header className="top">
         <div className="brand-row">
-          <a href="/" className="brand-title">Comma</a>
+          <a href="/" className="brand-title">
+            <img src="/comma-logo.png" alt="Comma" className="brand-logo-img" />
+          </a>
           <span className="brand-tagline">Ingest Documents</span>
         </div>
         <nav className="nav-links">

@@ -360,18 +360,6 @@ export function RadialWebGraph({
     });
   }, [upstreamTrail, nodeMap]);
 
-  // Sibling Alternatives (Grouped at the Bottom Docked Shelf)
-  const siblingAlternatives = useMemo(() => {
-    if (upstreamTrail.length === 0) return [];
-    const lastAncestorId = upstreamTrail[upstreamTrail.length - 1];
-    const distinct = getDistinctNeighbors(lastAncestorId, adjacency, nodeMap);
-    const currentRootLabel = nodeMap.get(rootId)?.label || rootId;
-    const trailSet = new Set(upstreamTrail);
-    return distinct.filter(
-      (n) => n.id !== rootId && n.label !== currentRootLabel && !trailSet.has(n.id)
-    );
-  }, [upstreamTrail, rootId, adjacency, nodeMap]);
-
   // Reset to initial root view
   const handleResetToRoot = useCallback(() => {
     if (!rootId) return;
@@ -1356,33 +1344,6 @@ export function RadialWebGraph({
           })}
         </g>
       </svg>
-
-      {/* 5. Alternative Siblings Shelf Docked at Bottom */}
-      {siblingAlternatives.length > 0 && (
-        <div className="flow-alt-shelf">
-          <div className="shelf-title">
-            <span>↶ From {nodeMap.get(upstreamTrail[upstreamTrail.length - 1])?.label || "Origin"}:</span>
-          </div>
-          <div className="shelf-chips">
-            {siblingAlternatives.map((alt) => {
-              const isSelected = selected === alt.id;
-              return (
-                <button
-                  key={alt.id}
-                  className={`shelf-chip ${isSelected ? "selected" : ""}`}
-                  onClick={() => onSelect(alt.id)}
-                  onDoubleClick={() => changeRoot(alt.id)}
-                  title={`Click to inspect ${alt.label}. Double-click to set as flow root.`}
-                >
-                  <span className="chip-dot" style={{ background: getNodeColor(alt.type) }} />
-                  <span className="chip-label">{alt.label}</span>
-                  {alt.amount && <span className="chip-amt">${alt.amount}</span>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
