@@ -10,7 +10,7 @@ from app.graphstore.claims import build_claims
 from app.graphstore.store import edges_from_claims, episode_edges, index_counts, structure_graph
 from app.relationships import find_relationships, load_records, merge_edges
 from app.snapshots import AccessError, get_actor
-from app.temporal import exclusion_reason, money
+from app.temporal import aware, exclusion_reason, interval_contains, money
 
 ORG = "org-decagon"
 
@@ -18,6 +18,8 @@ ORG = "org-decagon"
 def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datetime, mode: str, view: str | None) -> dict:
     if mode not in {"audit", "pre_decision"}:
         raise AccessError("NOT_IN_SNAPSHOT")
+    if organization_id == "all":
+        return _all_organizations_graph(db, as_of, mode, view)
     actor = get_actor(db, actor_id)
     if actor.organization_id != organization_id:
         raise AccessError("OUTSIDE_ORGANIZATION")
@@ -123,6 +125,146 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
     }
 
 
+def _all_organizations_graph(db: Session, as_of: datetime, mode: str, view: str | None) -> dict:
+    """Every organization that has documents, in one graph.
+
+    Availability and as_of still hide records. A person and their role do not.
+    Edges come from the same deterministic rules as a single organization, run
+    across the combined records. Organizations with no documents are absent.
+    """
+    if view is None:
+        view = "agent"
+    cases = list(db.scalars(select(Case).order_by(Case.id)).all())
+    hidden: set[str] = set()
+    if mode == "pre_decision":
+        hidden = set(db.scalars(select(Case.decision_version_id).where(Case.decision_version_id.is_not(None))).all())
+    versions = list(
+        db.scalars(
+            select(ArtifactVersion)
+            .join(SourceArtifact)
+            .options(
+                selectinload(ArtifactVersion.artifact),
+                selectinload(ArtifactVersion.grants),
+                selectinload(ArtifactVersion.facts),
+            )
+        ).all()
+    )
+    nodes = []
+    documents = []
+    linked = 0
+    for version in versions:
+        case_ids = list((version.metadata_json or {}).get("case_ids") or [])
+        on_graph = bool(case_ids) or version.artifact.kind == "policy"
+        reason = _time_exclusion(version, as_of, mode, hidden)
+        if reason is None:
+            documents.append(_document(version, case_ids, on_graph))
+            nodes.append(_node(version, case_ids, redacted=False))
+            if on_graph:
+                linked += 1
+        elif on_graph and view == "auditor" and reason in {"FUTURE_INFORMATION", "NOT_IN_SNAPSHOT"}:
+            linked += 1
+            nodes.append(_node(version, case_ids, redacted=True))
+    documents.sort(key=lambda item: (item["available_from"] or "", item["id"]))
+    node_ids = {node["id"] for node in nodes}
+    edges = []
+    for edge in db.scalars(select(GraphEdge)).all():
+        if edge.id.startswith("ge-"):
+            continue
+        if edge.from_node_id in node_ids and edge.to_node_id in node_ids:
+            edges.append(
+                {
+                    "id": edge.id,
+                    "source": edge.from_node_id,
+                    "target": edge.to_node_id,
+                    "type": edge.edge_type,
+                    "inferred": edge.is_inferred,
+                    "explanation": edge.explanation,
+                    "confidence": edge.confidence,
+                }
+            )
+    redacted = {node["id"] for node in nodes if node["redacted"]}
+    visible = [version for version in versions if f"artifact:{version.id}" in node_ids and f"artifact:{version.id}" not in redacted]
+    records = load_records(db, visible)
+    merge_edges(edges, find_relationships(records))
+    by_version = {record["version_id"]: record for record in records}
+    by_org: dict[str, list[dict]] = {}
+    for version in visible:
+        record = by_version.get(version.id)
+        if record is not None:
+            by_org.setdefault(version.artifact.organization_id, []).append(record)
+    present = {node["id"] for node in nodes}
+    for org_id, org_records in by_org.items():
+        visible_ids = {record["version_id"] for record in org_records}
+        stored = list(db.scalars(select(Claim).where(Claim.organization_id == org_id)).all())
+        merge_edges(edges, edges_from_claims(stored or build_claims(org_records), org_records, as_of, visible_ids))
+        extra_nodes, extra_edges = structure_graph(db, org_id, org_records)
+        for extra in extra_nodes:
+            if extra["id"] not in present:
+                nodes.append(extra)
+                present.add(extra["id"])
+        merge_edges(edges, extra_edges)
+    merge_edges(edges, episode_edges(db, records, {record["external_id"] for record in records}))
+    organization_ids = sorted({version.artifact.organization_id for version in versions})
+    actors = []
+    if organization_ids:
+        actors = [
+            {"id": person.id, "name": person.name, "role": person.role}
+            for person in db.scalars(select(Actor).where(Actor.organization_id.in_(organization_ids)).order_by(Actor.name)).all()
+        ]
+    return {
+        "organization_id": "all",
+        "scope": "all",
+        "as_of": as_of.isoformat(),
+        "mode": mode,
+        "view": view,
+        "actor": {"id": "all", "name": "All records", "role": "auditor" if view == "auditor" else "agent"},
+        "actors": actors,
+        "nodes": nodes,
+        "edges": edges,
+        "documents": documents,
+        "cases": [
+            {
+                "id": case.id,
+                "title": case.summary.split(".")[0],
+                "vendor": case.vendor_name,
+                "finding": _finding(case.id, nodes, view),
+            }
+            for case in cases
+        ],
+        "corpus": {"documents": len(versions), "visible": len(documents), "on_graph": linked},
+        "index": _combined_index(db, organization_ids),
+        "run": _latest_run(db),
+    }
+
+
+def _time_exclusion(version: ArtifactVersion, as_of: datetime, mode: str, hidden_version_ids: set[str]) -> str | None:
+    if version.id in hidden_version_ids and mode == "pre_decision":
+        return "NOT_IN_SNAPSHOT"
+    if version.availability_status != "verified" or version.available_from is None:
+        return "UNKNOWN_AVAILABILITY"
+    if not interval_contains(version.available_from, version.available_to, as_of):
+        if version.available_from and aware(as_of) < aware(version.available_from):
+            return "FUTURE_INFORMATION"
+        return "NOT_IN_SNAPSHOT"
+    return None
+
+
+def _combined_index(db: Session, organization_ids: list[str]) -> dict:
+    totals = {"entities": 0, "claims": 0, "mentions": 0, "ledger_facts": 0}
+    for organization_id in organization_ids:
+        counts = index_counts(db, organization_id)
+        for key in totals:
+            totals[key] += counts[key]
+    return totals
+
+
+def _latest_run(db: Session) -> dict | None:
+    job = db.scalars(select(IngestJob).order_by(IngestJob.created_at.desc())).first()
+    if job is None:
+        return None
+    return _run(db, job.organization_id)
+
+
 def preview_document(db: Session, organization_id: str, actor_id: str, as_of: datetime, mode: str, version_id: str) -> dict:
     """One visible document, including original bytes metadata when the file is still stored.
 
@@ -161,6 +303,28 @@ def document_original(db: Session, organization_id: str, actor_id: str, as_of: d
 def _visible_version(db: Session, organization_id: str, actor_id: str, as_of: datetime, mode: str, version_id: str) -> ArtifactVersion:
     if mode not in {"audit", "pre_decision"}:
         raise AccessError("NOT_IN_SNAPSHOT")
+    if organization_id == "all":
+        version = db.scalar(
+            select(ArtifactVersion)
+            .where(ArtifactVersion.id == version_id)
+            .options(selectinload(ArtifactVersion.artifact), selectinload(ArtifactVersion.grants), selectinload(ArtifactVersion.facts))
+        )
+        if version is None:
+            raise AccessError("NOT_IN_SNAPSHOT")
+        hidden: set[str] = set()
+        if mode == "pre_decision":
+            hidden = set(
+                db.scalars(
+                    select(Case.decision_version_id).where(
+                        Case.organization_id == version.artifact.organization_id,
+                        Case.decision_version_id.is_not(None),
+                    )
+                ).all()
+            )
+        reason = _time_exclusion(version, as_of, mode, hidden)
+        if reason:
+            raise AccessError(reason)
+        return version
     actor = get_actor(db, actor_id)
     if actor.organization_id != organization_id:
         raise AccessError("OUTSIDE_ORGANIZATION")

@@ -90,18 +90,14 @@ export default function HomePage() {
   }, []);
 
   const currentActor = allActors.find((a) => a.id === actorId);
-  const organizationId = currentActor?.organization_id || "org-acme";
 
-  // 2. Fetch full company graph
+  // Combined graph: Acme and Decagon together, without choosing a person.
   useEffect(() => {
-    if (!deepLinkReady || !actorsReady || !actorId) return;
-    const view = currentActor?.role === "auditor" ? "auditor" : "agent";
+    if (!deepLinkReady) return;
     const params = new URLSearchParams({
-      organization_id: organizationId,
-      actor_id: actorId,
+      scope: "all",
       as_of: asOf,
       mode,
-      view,
     });
     api<CompanyGraph>(`/api/v1/company-graph?${params}`)
       .then((next) => {
@@ -109,7 +105,7 @@ export default function HomePage() {
         setError("");
       })
       .catch((reason: Error) => setError(reason.message));
-  }, [deepLinkReady, actorsReady, actorId, organizationId, asOf, mode, job?.status, pulse]);
+  }, [deepLinkReady, asOf, mode, job?.status, pulse]);
 
   // 3. When focused on a specific case, fetch its snapshot
   useEffect(() => {
@@ -190,7 +186,7 @@ export default function HomePage() {
   const inspectorNodes =
     currentNode && !activeNodes.some((item) => item.id === currentNode.id) ? graph?.nodes || activeNodes : activeNodes;
   const inspectorEdges = inspectorNodes === activeNodes ? activeEdges : graph?.edges || activeEdges;
-  const nodeSummary = useNodeSummary(currentNode?.id || null, actorId, asOf, mode, organizationId);
+  const nodeSummary = useNodeSummary(currentNode?.id || null, actorId, asOf, mode, "all");
   const focusedCase = (graph?.cases || []).find((item) => item.id === focus) || null;
   const links = currentNode ? linkedRecords(currentNode, inspectorNodes, inspectorEdges) : [];
   const gap = currentNode ? amountGap(currentNode.amount, links.filter((item) => item.edge.type === "CONTRADICTS").map((item) => item.node?.amount)) : null;
@@ -289,7 +285,7 @@ export default function HomePage() {
     try {
       const view = currentActor?.role === "auditor" ? "auditor" : "agent";
       const params = new URLSearchParams({
-        organization_id: organizationId,
+        organization_id: "all",
         actor_id: actorId,
         as_of: asOf,
         mode,
@@ -414,20 +410,6 @@ export default function HomePage() {
 
         {/* Right: Controls & Inspector Toggle */}
         <div className="floating-glass">
-          <div className="pill-select">
-            <select
-              aria-label="Actor"
-              value={actorId}
-              onChange={(event) => setActorId(event.target.value)}
-            >
-              {allActors.map((person) => (
-                <option key={person.id} value={person.id}>
-                  {person.name} · {person.role}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <div className="presets" role="group" aria-label="View mode">
             <button
               className={viewMode === "web" ? "primary" : ""}
@@ -791,7 +773,7 @@ export default function HomePage() {
           actorId={actorId}
           asOf={asOf}
           mode={mode}
-          organizationId={organizationId}
+          organizationId="all"
           onClose={() => setPreviewId(null)}
         />
       ) : null}

@@ -71,12 +71,15 @@ def company_graph_route(
     as_of: str = "2025-12-15T12:00:00+00:00",
     mode: str = "audit",
     view: str = "",
+    scope: str = "",
     db: Session = Depends(db_session),
 ):
     from app.company_graph import company_graph
     from app.ingest.decagon import ensure_company
 
-    if organization_id == "org-decagon":
+    if scope == "all":
+        organization_id = "all"
+    if organization_id in {"org-decagon", "all"}:
         ensure_company(db)
     return company_graph(db, organization_id, actor_id, utc(as_of), mode, view or None)
 
@@ -98,7 +101,7 @@ def company_node_summary(
     from app.models import ArtifactVersion
     from app.node_summary import reading_ids, summarize_node
 
-    if organization_id == "org-decagon":
+    if organization_id in {"org-decagon", "all"}:
         ensure_company(db)
     graph = company_graph(db, organization_id, actor_id, utc(as_of), mode, view or None)
     version_ids = [item.removeprefix("artifact:") for item in reading_ids(graph, node_id)]
@@ -132,7 +135,7 @@ def company_investigate(
 
     if any(len(line) > 240 for line in brief.lines):
         raise HTTPException(status_code=422, detail="The review could not be read.")
-    if organization_id == "org-decagon":
+    if organization_id in {"org-decagon", "all"}:
         ensure_company(db)
     graph = company_graph(db, organization_id, actor_id, utc(as_of), mode, view or None)
     result = compose_review(graph, node_id, brief.model_dump())

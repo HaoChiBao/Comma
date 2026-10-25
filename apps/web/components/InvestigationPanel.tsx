@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { AgentSuggestion, InvestigationStep, Precedent } from "@/lib/investigate";
 
 export function InvestigationPanel({
@@ -23,12 +24,42 @@ export function InvestigationPanel({
   onDismiss: (id: string) => void;
   onTogglePrecedent: (id: string) => void;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const learned = precedents.filter((item) => item.kind === "learned");
   const visibility = precedents.filter((item) => item.kind === "visibility");
   const visibleSteps = steps.slice(0, shown);
 
+  useEffect(() => {
+    if (!thinking && shown === 0) return;
+    const node = rootRef.current;
+    if (!node) return;
+    const scroller = node.closest(".floating-inspector");
+    if (!(scroller instanceof HTMLElement)) return;
+
+    const align = () => {
+      const previous = node.previousElementSibling;
+      const anchor =
+        previous instanceof HTMLElement && previous.classList.contains("inspector-agent-row") ? previous : node;
+      const scrollerRect = scroller.getBoundingClientRect();
+      const rect = anchor.getBoundingClientRect();
+      if (rect.top < scrollerRect.top - 40) return;
+      if (rect.top <= scrollerRect.top + 16 && node.getBoundingClientRect().top < scrollerRect.bottom - 24) return;
+      const delta = rect.top - scrollerRect.top;
+      scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + delta - 8), behavior: "auto" });
+    };
+
+    align();
+    const observer = new ResizeObserver(() => align());
+    observer.observe(scroller);
+    const stop = window.setTimeout(() => observer.disconnect(), thinking ? 16000 : 1500);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(stop);
+    };
+  }, [thinking, shown]);
+
   return (
-    <div className="investigation-panel">
+    <div className="investigation-panel" ref={rootRef}>
       {suggestion ? (
         <div className="suggestion-card">
           <div className="suggestion-kicker">Suggested by Comma Agent</div>

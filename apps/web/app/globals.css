@@ -1384,6 +1384,7 @@ button.summary-ref:hover {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+  scroll-margin-top: 0.5rem;
 }
 .agent-held {
   flex: 1;
