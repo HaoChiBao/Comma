@@ -236,7 +236,10 @@ def relate(db: Session, job: IngestJob, step: IngestStep) -> dict:
                 )
             )
             linked += 1
-    return {"edges": linked}
+    from app.graphstore.store import index_records
+
+    indexed = index_records(db, ORG, load_records(db, versions))
+    return {"edges": linked, **indexed}
 
 
 def open_cases(db: Session, job: IngestJob, step: IngestStep) -> dict:

@@ -29,6 +29,15 @@ def _load_company(db) -> None:
         start_decagon(db)
     except ValueError:
         return
+    import threading
+
+    def _index() -> None:
+        from app.graphstore.store import ensure_company_index
+
+        with session() as database:
+            ensure_company_index(database)
+
+    threading.Thread(target=_index, name="worldstate-index", daemon=True).start()
 
 
 def create_app(database_url: str | None = None) -> FastAPI:

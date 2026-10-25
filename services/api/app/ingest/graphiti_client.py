@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -51,6 +52,93 @@ def episode_body(record: IngestRecord) -> str:
         },
         sort_keys=True,
     )
+
+
+def propose_links(episode_body: dict) -> list[dict]:
+    """Suggest links from one episode. This does not call Graphiti or open a connection."""
+    document_id = str(episode_body.get("document_id") or "")
+    amount = episode_body.get("amount")
+    amount_text = "" if amount is None else str(amount)
+    proposals = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add(claim_type: str, from_id: str, to_id: str, explanation: str) -> None:
+        if not from_id or not to_id:
+            return
+        key = (claim_type, from_id, to_id)
+        if key in seen:
+            return
+        seen.add(key)
+        proposals.append(
+            {
+                "claim_type": claim_type,
+                "from_id": from_id,
+                "to_id": to_id,
+                "explanation": explanation,
+            }
+        )
+
+    references: list[str] = []
+    for reference in episode_body.get("references") or []:
+        ref_id = str(reference or "")
+        if ref_id and ref_id not in references:
+            references.append(ref_id)
+    for ref_id in references:
+        # The printed amount stays on the invoice suggestion, so refusing that id refuses the figure.
+        if document_id and document_id != ref_id and ref_id.upper().startswith("INV-") and amount_text:
+            add("SUPPORTS", document_id, ref_id, f"{document_id} names {ref_id} at {amount_text}.")
+        elif document_id and document_id != ref_id:
+            add("MENTIONS", document_id, ref_id, f"{document_id} names {ref_id}.")
+        # Both ends are this id, so the gate can keep a visible reference when the other ids are not.
+        add("MENTIONS", ref_id, ref_id, f"{ref_id} is named in this episode.")
+    return proposals
+
+
+def accept_links(proposals, visible_ids: set[str]) -> list[dict]:
+    """Keep a suggestion only when both ends are already visible. Dropped ids stay out of the text."""
+    visible = {str(item) for item in visible_ids}
+    kept = []
+    dropped = []
+    for proposal in proposals:
+        from_id = str(proposal.get("from_id") or "")
+        to_id = str(proposal.get("to_id") or "")
+        if from_id in visible and to_id in visible:
+            kept.append(proposal)
+        else:
+            dropped.append(proposal)
+    hidden = _hidden_tokens(dropped, visible)
+    accepted = []
+    for proposal in kept:
+        accepted.append(
+            {
+                "claim_type": str(proposal.get("claim_type") or ""),
+                "from_id": str(proposal.get("from_id") or ""),
+                "to_id": str(proposal.get("to_id") or ""),
+                "explanation": _scrub(str(proposal.get("explanation") or ""), hidden),
+            }
+        )
+    return accepted
+
+
+def _hidden_tokens(dropped: list[dict], visible: set[str]) -> list[str]:
+    tokens: set[str] = set()
+    for proposal in dropped:
+        for key in ("from_id", "to_id"):
+            value = str(proposal.get(key) or "")
+            if value and value not in visible:
+                tokens.add(value)
+        for match in re.findall(r"\d{1,3}(?:,\d{3})*\.\d{2}", str(proposal.get("explanation") or "")):
+            tokens.add(match)
+    return sorted(tokens, key=len, reverse=True)
+
+
+def _scrub(explanation: str, tokens: list[str]) -> str:
+    for token in tokens:
+        if token.isdigit():
+            explanation = re.sub(rf"\b{re.escape(token)}\b", "", explanation)
+        else:
+            explanation = explanation.replace(token, "")
+    return " ".join(explanation.split())
 
 
 def _push_graphiti(record: IngestRecord, body: str, reference: datetime, group_id: str) -> str:

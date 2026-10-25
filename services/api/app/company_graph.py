@@ -5,7 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.graph import KIND_NODE
-from app.models import Actor, ArtifactVersion, Case, GraphEdge, IngestJob, IngestStep, SourceArtifact
+from app.models import Actor, ArtifactVersion, Case, Claim, GraphEdge, IngestJob, IngestStep, SourceArtifact
+from app.graphstore.claims import build_claims
+from app.graphstore.store import edges_from_claims, episode_edges, index_counts
 from app.relationships import find_relationships, load_records, merge_edges
 from app.snapshots import AccessError, get_actor
 from app.temporal import exclusion_reason, money
@@ -78,9 +80,14 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
                     "confidence": edge.confidence,
                 }
             )
-    hidden = {node["id"] for node in nodes if node["redacted"]}
-    visible = [version for version in versions if f"artifact:{version.id}" in node_ids and f"artifact:{version.id}" not in hidden]
-    merge_edges(edges, find_relationships(load_records(db, visible)))
+    redacted = {node["id"] for node in nodes if node["redacted"]}
+    visible = [version for version in versions if f"artifact:{version.id}" in node_ids and f"artifact:{version.id}" not in redacted]
+    records = load_records(db, visible)
+    merge_edges(edges, find_relationships(records))
+    visible_ids = {version.id for version in visible}
+    stored = list(db.scalars(select(Claim).where(Claim.organization_id == organization_id)).all())
+    merge_edges(edges, edges_from_claims(stored or build_claims(records), records, as_of, visible_ids))
+    merge_edges(edges, episode_edges(db, records, {record["external_id"] for record in records}))
     return {
         "organization_id": organization_id,
         "as_of": as_of.isoformat(),
@@ -104,6 +111,7 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
             for case in cases
         ],
         "corpus": {"documents": len(versions), "visible": len(documents), "on_graph": linked},
+        "index": index_counts(db, organization_id),
         "run": _run(db, organization_id),
     }
 

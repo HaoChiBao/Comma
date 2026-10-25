@@ -1,7 +1,18 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -25,6 +36,8 @@ class Actor(Base):
 
 class SourceArtifact(Base):
     __tablename__ = "source_artifacts"
+    # Not unique: a sample upload keeps its own row beside the seeded copy of the same external id.
+    __table_args__ = (Index("ix_source_artifacts_org_external", "organization_id", "external_id"),)
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
     kind: Mapped[str] = mapped_column(String(64))
@@ -36,6 +49,7 @@ class SourceArtifact(Base):
 
 class ArtifactVersion(Base):
     __tablename__ = "artifact_versions"
+    __table_args__ = (Index("ix_artifact_versions_content_hash", "content_hash"),)
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     artifact_id: Mapped[str] = mapped_column(ForeignKey("source_artifacts.id"))
     version: Mapped[int] = mapped_column()
@@ -68,6 +82,7 @@ class AccessGrant(Base):
 
 class Fact(Base):
     __tablename__ = "facts"
+    __table_args__ = (Index("ix_facts_entity_fact_amount", "entity_ref", "fact_type", "amount_decimal"),)
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     artifact_version_id: Mapped[str] = mapped_column(ForeignKey("artifact_versions.id"))
     fact_type: Mapped[str] = mapped_column(String(64))
@@ -295,3 +310,63 @@ class TraceRun(Base):
     result_json: Mapped[dict] = mapped_column(JSON)
     graph_json: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ResolvedEntity(Base):
+    __tablename__ = "resolved_entities"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "kind", "external_id", name="uq_resolved_entity_identity"),
+        CheckConstraint("kind IN ('vendor', 'transaction')", name="ck_resolved_entities_kind"),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    kind: Mapped[str] = mapped_column(String(32))
+    external_id: Mapped[str] = mapped_column(String(80))
+    label: Mapped[str] = mapped_column(String(300))
+
+
+class EntityAlias(Base):
+    __tablename__ = "entity_aliases"
+    __table_args__ = (UniqueConstraint("organization_id", "alias", name="uq_entity_alias_org_alias"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    entity_id: Mapped[str] = mapped_column(ForeignKey("resolved_entities.id"))
+    alias: Mapped[str] = mapped_column(String(300))
+
+
+class Mention(Base):
+    __tablename__ = "mentions"
+    __table_args__ = (
+        UniqueConstraint("version_id", "mentioned_external_id", name="uq_mention_version_external"),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version_id: Mapped[str] = mapped_column(ForeignKey("artifact_versions.id"), index=True)
+    mentioned_external_id: Mapped[str] = mapped_column(String(80), index=True)
+
+
+class Claim(Base):
+    __tablename__ = "claims"
+    __table_args__ = (
+        UniqueConstraint("evidence_hash", name="uq_claim_evidence_hash"),
+        Index(
+            "ix_claims_from_to_type_knowable",
+            "from_node_id",
+            "to_node_id",
+            "claim_type",
+            "knowable_from",
+        ),
+        CheckConstraint("status IN ('exact', 'ambiguous', 'unexplained')", name="ck_claims_status"),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    claim_type: Mapped[str] = mapped_column(String(64))
+    from_node_id: Mapped[str] = mapped_column(String(80))
+    to_node_id: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(32))
+    evidence_version_ids: Mapped[list] = mapped_column(JSON)
+    formulas: Mapped[list] = mapped_column(JSON)
+    knowable_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evidence_hash: Mapped[str] = mapped_column(String(64))
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    is_inferred: Mapped[bool] = mapped_column(default=False)
+    confidence: Mapped[str] = mapped_column(String(16))
