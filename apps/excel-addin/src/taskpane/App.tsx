@@ -3,13 +3,12 @@ import { AsOfMenu } from "./components/AsOfMenu";
 import { IdleView } from "./components/IdleView";
 import { LoadingView } from "./components/LoadingView";
 import { ResultView } from "./components/ResultView";
-import { ScanResults } from "./components/ScanResults";
 import { SourcePanel } from "./components/SourcePanel";
-import { clearHighlight, clearHighlights, markCells, settingsStore } from "./office/formatting";
-import { NotesUnsupportedError, clearNotes, noteSettingsStore, supportsNotes, writeCustomNote, writeFindingNotes, type NoteFinding, type NoteResult } from "./office/notes";
-import { readPrecedents, readSelectedCell, readSelectedRange, readSelection, readUsedRange, readWorkbookId, selectCell, supportsPrecedents, watchSelection, type RangeCells, type SelectionSummary } from "./office/selection";
+import { clearHighlight, markCells, settingsStore } from "./office/formatting";
+import { noteSettingsStore, writeCustomNote } from "./office/notes";
+import { readPrecedents, readSelectedCell, readSelection, readUsedRange, readWorkbookId, selectCell, supportsPrecedents, watchSelection, type RangeCells, type SelectionSummary } from "./office/selection";
 import { createClient, describeError } from "./services/worldstateApi";
-import type { Actor, AvailableEvidence, InspectRequest, ScanFinding, ScanResult, SourceDetail, Trace, TraceGraph } from "./types";
+import type { Actor, AvailableEvidence, InspectRequest, ScanFinding, SourceDetail, Trace, TraceGraph } from "./types";
 import { COMPANY_ORG, DEFAULT_ACTOR, REASON_LABEL, formatDate, formatMoney } from "./view";
 import { AS_OF_PRESETS, LOADING_MS, asOfPreset, defaultSelection, loadingDone, loadingStep } from "./sidebarView";
 import { toSidebarTrace } from "./sidebarPresentation";
@@ -64,14 +63,6 @@ function vendorEmailDraft(trace: Trace): { recipient: string; subject: string; b
   return { recipient: vendorEmail(trace), subject, body };
 }
 
-function describeNotes(result: NoteResult): string {
-  const parts = [];
-  if (result.written) parts.push(`added ${result.written} note(s)`);
-  if (result.updated) parts.push(`updated ${result.updated}`);
-  if (result.skipped.length) parts.push(`left ${result.skipped.length} existing note(s) alone (${result.skipped.map((key) => key.split("!")[1]).join(", ")})`);
-  return parts.length ? ` Notes: ${parts.join(", ")}. Hover a flagged cell to read it.` : "";
-}
-
 function withVendor(findings: ScanFinding[], cells: RangeCells["cells"]): DisplayFinding[] {
   const values = new Map(cells.map((cell) => [cell.address, cell.raw_value]));
   return findings.map((finding) => {
@@ -95,7 +86,6 @@ export function App() {
   const [traceVendor, setTraceVendor] = React.useState("");
   const [selectedItem, setSelectedItem] = React.useState("");
   const [flagged, setFlagged] = React.useState<DisplayFinding[] | null>(null);
-  const [scanResult, setScanResult] = React.useState<ScanResult | null>(null);
   const [scanNote, setScanNote] = React.useState<string | null>(null);
   const [source, setSource] = React.useState<SourceDetail | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -115,7 +105,6 @@ export function App() {
   requestRef.current = request;
   filtersRef.current = { asOf, actorId };
   const preset = asOfPreset(asOf);
-  const actor = actors.find((item) => item.id === actorId);
 
   function clearNoticeTimer() {
     if (noticeTimer.current !== null) {
@@ -139,17 +128,6 @@ export function App() {
   }
 
   React.useEffect(() => () => clearNoticeTimer(), []);
-
-  const noteContext = () => ({
-    asOfLabel: AS_OF_PRESETS.find((item) => item.value === asOf)?.label ?? formatDate(asOf),
-    actorLabel: actor ? `${actor.name} (${actor.role})` : actorId,
-  });
-
-  async function addNotes(context: Excel.RequestContext, findings: NoteFinding[]): Promise<string> {
-    if (!findings.some((finding) => finding.status !== "supported")) return "";
-    if (!supportsNotes()) return ` ${new NotesUnsupportedError().message}`;
-    return describeNotes(await writeFindingNotes(context, findings, noteSettingsStore(), noteContext()));
-  }
 
   const refreshFlags = React.useCallback(async (date: string, actor: string) => {
     try {
@@ -308,27 +286,6 @@ export function App() {
     retrace({ actor_id: value }, asOf, value);
   };
 
-  const scanRange = () => run("Scanning selection", async () => {
-    await Excel.run(async (context) => {
-      const workbookId = await readWorkbookId(context);
-      const range = await readSelectedRange(context);
-      const result = await client.scan({ workbook_id: workbookId, sheet_name: range.sheetName, range_address: range.rangeAddress, cells: range.cells, as_of: asOf, actor_id: actorId });
-      const marked = await markCells(context, result.findings.map((item) => ({ key: item.cell, status: item.status })), settingsStore());
-      setScanResult(result);
-      const notes = await addNotes(context, result.findings.map((item) => ({ key: item.cell, status: item.status, title: item.title, summary: item.summary, difference: item.difference })));
-      showNotice((marked ? `Highlighted ${marked} cell(s). Values were not changed.` : "Nothing to highlight.") + notes);
-    });
-  });
-
-  const clear = () => run("Clearing", async () => {
-    const [restored, removed] = await Excel.run(async (context) => [
-      await clearHighlights(context, settingsStore()),
-      await clearNotes(context, noteSettingsStore()),
-    ]);
-    const parts = [restored ? `restored the original fill on ${restored} cell(s)` : "", removed ? `removed ${removed} WorldState note(s)` : ""].filter(Boolean);
-    showNotice(parts.length ? `Cleared: ${parts.join(" and ")}.` : "No WorldState highlights or notes to clear.");
-  });
-
   const noteCurrent = async (message: string): Promise<boolean> => {
     if (!trace) return false;
     return run("Adding note", async () => {
@@ -415,15 +372,8 @@ export function App() {
           busy={!!busy}
         /> : null}
 
-        {scanResult ? <ScanResults result={scanResult} onSelectCell={(key) => void goToCell(key)} /> : null}
         {source ? <SourcePanel source={source} onClose={() => setSource(null)} /> : null}
       </div>
-
-      <footer className="pane-footer">
-        <button type="button" className="ws-link" onClick={() => void scanRange()} disabled={!!busy}>Scan selection &amp; add notes</button>
-        <button type="button" className="ws-link" onClick={() => void clear()} disabled={!!busy}>Clear WorldState highlights and notes</button>
-        {trace ? <span className="snapshot">Snapshot {trace.manifest_hash.slice(0, 8)}</span> : null}
-      </footer>
     </div>
   );
 }

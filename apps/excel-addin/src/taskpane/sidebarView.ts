@@ -121,10 +121,9 @@ export type GraphNodeView = {
   id: string;
   x: number;
   y: number;
-  r: number;
-  ring: number;
+  width: number;
+  height: number;
   ringOpacity: number;
-  hit: number;
   fill: string;
   tint: string;
   stroke: string;
@@ -132,6 +131,7 @@ export type GraphNodeView = {
   dash: string;
   opacity: number;
   label: string;
+  infoLabel: string | null;
   labelSize: number;
   labelColor: string;
   clickable: boolean;
@@ -142,33 +142,45 @@ export type GraphEdgeView = { id: string; d: string; stroke: string; width: numb
 export const GRAPH_W = 328;
 export const GRAPH_H = 226;
 
-const nr = (amount: number) => 17 + 7 * Math.min(1.6, Math.sqrt(amount / 150));
 const f1 = (value: number) => Number(value.toFixed(1));
 
-function edgePath(a: { x: number; y: number }, b: { x: number; y: number }, rel: string, id: string, width = 2): GraphEdgeView {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const d =
-    Math.abs(dx) > Math.abs(dy)
-      ? `M${f1(a.x)} ${f1(a.y)}C${f1(a.x + dx * 0.5)} ${f1(a.y)} ${f1(b.x - dx * 0.5)} ${f1(b.y)} ${f1(b.x)} ${f1(b.y)}`
-      : `M${f1(a.x)} ${f1(a.y)}L${f1(b.x)} ${f1(b.y)}`;
+function edgePath(
+  a: { x: number; y: number; width: number },
+  b: { x: number; y: number; width: number },
+  rel: string,
+  id: string,
+  width = 2,
+): GraphEdgeView {
+  const startX = a.x + a.width / 2;
+  const endX = b.x - b.width / 2;
+  const dx = endX - startX;
+  const controlX = dx / 2;
+  const d = `M${f1(startX)} ${f1(a.y)}C${f1(startX + controlX)} ${f1(a.y)} ${f1(endX - controlX)} ${f1(b.y)} ${f1(endX)} ${f1(b.y)}`;
   const faint = rel === "withheld" || rel === "context" || rel === "missing";
   return { id, d, stroke: rel === "formula" ? FAINT : relColor(rel), width, dash: faint ? "0.1 8" : "0.1 5", opacity: faint ? 0.8 : 0.95 };
 }
 
-/**
- * The small graph: formula inputs on the left, the cell in the middle, documents on the right.
- * Documents are small rings with their type inside (PO, EM, INV); inputs and the cell carry their address.
- */
-export function layoutGraph(trace: Trace, selected: string): { nodes: GraphNodeView[]; edges: GraphEdgeView[] } {
-  const X = [48, 164, 282];
-  const C = { x: X[1], y: 104 };
+function arrivedAfterPeriod(availableAt: string | null | undefined, period: string | null): boolean {
+  const match = /^(\d{4})-(\d{2})$/.exec(period ?? "");
+  if (!availableAt || !match) return false;
+  const monthEnd = new Date(Date.UTC(Number(match[1]), Number(match[2]), 0)).toISOString().slice(0, 10);
+  return availableAt.slice(0, 10) > monthEnd;
+}
+
+/** The graph keeps formula inputs left, the inspected cell centered, and evidence right in rounded rectangles. */
+export function layoutGraph(trace: Trace, selected: string): { nodes: GraphNodeView[]; edges: GraphEdgeView[]; height: number } {
+  const X = [40, 124, 262];
   const inputs = trace.items.filter((item) => item.relationship === "formula");
   const sources = trace.items.filter((item) => item.relationship !== "formula");
-  const place = (list: TraceItem[], x: number, top: number, span: number) =>
-    list.map((item, i) => ({ item, x, y: list.length === 1 ? C.y : top + i * (span / (list.length - 1)) }));
-  const left = place(inputs, X[0], 56, 96);
-  const right = place(sources, X[2], 36, 136);
+  const rowHeight = 40;
+  const height = Math.max(GRAPH_H, Math.max(sources.length, inputs.length, 1) * rowHeight + 28);
+  const C = { x: X[1], y: height / 2, width: 84 };
+  const place = (list: TraceItem[], x: number, width: number) => {
+    const top = C.y - ((list.length - 1) * rowHeight) / 2;
+    return list.map((item, i) => ({ item, x, width, y: list.length === 1 ? C.y : top + i * rowHeight }));
+  };
+  const left = place(inputs, X[0], 60);
+  const right = place(sources, X[2], 104);
   const any = selected !== "";
   const edges: GraphEdgeView[] = [];
   const nodes: GraphNodeView[] = [];
@@ -180,17 +192,19 @@ export function layoutGraph(trace: Trace, selected: string): { nodes: GraphNodeV
     const held = item.relationship === "withheld";
     const color = relColor(item.relationship);
     const tint = TINT[item.relationship] ?? "#EFEAE4";
-    const r = small ? (amount ? 13 + 4 * Math.min(1.6, Math.sqrt(amount / 150)) : 14) : amount ? nr(amount) : 19;
     const opacity = any && !isSel ? 0.6 : 1;
-    const label = small ? item.abbr : item.id;
+    const label = item.abbr;
+    const amountLabel = item.amount ? money(item.amount, item.currency).replace(/\.00$/, "") : null;
+    const infoLabel = arrivedAfterPeriod(item.available_at, trace.cell.period)
+      ? shortDate(item.available_at ?? null)
+      : amountLabel;
     return {
       id: item.id,
       x: p.x,
       y: p.y,
-      r: f1(r),
-      ring: f1(r + (small ? 4 : 5)),
+      width: small ? 104 : 60,
+      height: small ? 28 : 26,
       ringOpacity: isSel ? 0.5 : 0,
-      hit: f1(r + (small ? 12 : 6)),
       fill: isSel ? tint : "#FFFFFF",
       tint,
       stroke: color,
@@ -198,21 +212,20 @@ export function layoutGraph(trace: Trace, selected: string): { nodes: GraphNodeV
       dash: held ? "2.5 3" : "0",
       opacity,
       label,
+      infoLabel,
       labelSize: small ? (label.length > 3 ? 8.5 : 10) : 11.5,
       labelColor: opacity < 1 ? "#8A817A" : held || item.relationship === "context" ? MUTE : INK,
       clickable: true,
     };
   };
   const placeholder = (id: string, label: string, x: number, small: boolean): GraphNodeView => {
-    const r = small ? 14 : 19;
     return {
       id,
       x,
       y: C.y,
-      r,
-      ring: r + 4,
+      width: small ? 104 : 60,
+      height: small ? 28 : 26,
       ringOpacity: 0,
-      hit: r,
       fill: "#FFFFFF",
       tint: "#EFEAE4",
       stroke: UNKNOWN,
@@ -220,6 +233,7 @@ export function layoutGraph(trace: Trace, selected: string): { nodes: GraphNodeV
       dash: "2.5 3",
       opacity: 1,
       label,
+      infoLabel: null,
       labelSize: small ? 10 : 11.5,
       labelColor: MUTE,
       clickable: false,
@@ -229,23 +243,26 @@ export function layoutGraph(trace: Trace, selected: string): { nodes: GraphNodeV
   left.forEach((p) => edges.push(edgePath(p, C, "formula", `in-${p.item.id}`)));
   right.forEach((p) => edges.push(edgePath(C, p, p.item.relationship, `out-${p.item.id}`)));
   if (!right.length) {
-    edges.push(edgePath(C, { x: X[2], y: C.y }, "missing", "out-none"));
+    edges.push(edgePath(C, { x: X[2], y: C.y, width: 104 }, "missing", "out-none"));
     nodes.push(placeholder("none", "?", X[2], true));
   }
-  if (!left.length) nodes.push(placeholder("typed", "Typed", X[0], false));
+  if (!left.length) {
+    edges.push(edgePath({ x: X[0], y: C.y, width: 60 }, C, "formula", "in-typed"));
+    nodes.push(placeholder("typed", "Typed", X[0], false));
+  }
 
   const status = STATUS_VIEW[trace.status];
-  const value = typeof trace.cell.raw_value === "number" ? trace.cell.raw_value : 0;
+  const infoLabel = typeof trace.cell.raw_value === "number"
+    ? money(trace.cell.raw_value).replace(/\.00$/, "")
+    : null;
   const filled = trace.status !== "unknown";
-  const r = (value ? nr(Math.abs(value)) : 19) * 1.12;
   nodes.push({
     id: trace.cell.key,
     x: C.x,
     y: C.y,
-    r: f1(r),
-    ring: f1(r + 6),
+    width: 84,
+    height: 32,
     ringOpacity: 0.35,
-    hit: f1(r),
     fill: filled ? status.color : "#FFFFFF",
     tint: filled ? status.color : "#EFEAE4",
     stroke: status.color,
@@ -253,13 +270,14 @@ export function layoutGraph(trace: Trace, selected: string): { nodes: GraphNodeV
     dash: filled ? "0" : "2.5 3",
     opacity: 1,
     label: trace.cell.address,
+    infoLabel,
     labelSize: 11.5,
     labelColor: filled ? "#FFFFFF" : INK,
     clickable: false,
   });
   left.forEach((p) => nodes.push(itemNode(p, false)));
   right.forEach((p) => nodes.push(itemNode(p, true)));
-  return { nodes, edges };
+  return { nodes, edges, height };
 }
 
 export type TimelineRow = {

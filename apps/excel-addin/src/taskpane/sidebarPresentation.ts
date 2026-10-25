@@ -56,7 +56,6 @@ function sourceItem(item: AvailableEvidence): SidebarTraceItem {
     { k: "Received", v: formatDate(item.available_at) },
     { k: "Link", v: item.basis },
   ];
-  if (item.snippet) details.push({ k: "Says", v: item.snippet });
   if (item.link_status === "candidate") details.push({ k: "Caveat", v: "The link is possible; the API has not verified that the preparer used it." });
   if (item.locator) details.push({ k: "Location", v: item.locator });
   return {
