@@ -61,7 +61,8 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0.2rem 0; }
   border-radius: 12px;
   overflow: hidden;
 }
-.graph svg { width: 100%; height: 100%; }
+.graph-board { position: relative; }
+.graph-board svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .node {
   position: absolute;
   min-width: 128px;
@@ -94,7 +95,8 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0.2rem 0; }
 .stage { position: relative; min-width: 0; }
 .toolbar { margin-bottom: 0.7rem; }
 .presets { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-.graph { height: calc(100vh - 210px); min-height: 560px; }
+.graph { height: calc(100vh - 210px); min-height: 560px; overflow: auto; }
+.graph.compact .node { min-width: 86px; max-width: 94px; padding: 0.18rem 0.35rem; font-size: 0.68rem; border-radius: 8px; }
 .cluster-label { position: absolute; color: var(--muted); font-size: 0.75rem; letter-spacing: 0.08em; pointer-events: none; }
 .node.dim { opacity: 0.28; }
 .fab {
