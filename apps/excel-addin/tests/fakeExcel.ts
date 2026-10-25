@@ -19,9 +19,38 @@ export class FakeExcel {
     return this.cells.get(key) as Cell;
   }
 
+  notes = new Map<string, string>();
+  activeSheet = "Accruals";
+
   context(): Excel.RequestContext {
     const fake = this;
+    const notes = (sheet: string) => ({
+      add: (address: string, content: string) => {
+        if (fake.notes.has(`${sheet}!${address}`)) throw new Error("Note already exists");
+        fake.notes.set(`${sheet}!${address}`, content);
+        fake.writes.push(`note add ${sheet}!${address}`);
+      },
+      getItemOrNullObject: (address: string) => {
+        const key = `${sheet}!${address}`;
+        return {
+          load: () => undefined,
+          get isNullObject() {
+            return !fake.notes.has(key);
+          },
+          get content() {
+            return fake.notes.get(key) ?? "";
+          },
+          set content(value: string) {
+            fake.notes.set(key, value);
+            fake.writes.push(`note update ${key}`);
+          },
+        };
+      },
+    });
     const worksheet = (sheet: string) => ({
+      name: sheet,
+      load: () => undefined,
+      notes: notes(sheet),
       activate: () => fake.writes.push(`activate ${sheet}`),
       getRange: (address: string) => fake.range(`${sheet}!${address}`),
     });
@@ -36,7 +65,7 @@ export class FakeExcel {
       },
       workbook: {
         getSelectedRange: () => fake.range(fake.selection),
-        worksheets: { getItem: worksheet },
+        worksheets: { getItem: worksheet, getActiveWorksheet: () => worksheet(fake.activeSheet) },
         properties: { custom: { getItemOrNullObject: () => ({ load: () => undefined, isNullObject: true, value: "" }) } },
       },
     } as unknown as Excel.RequestContext;
