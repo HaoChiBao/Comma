@@ -31,12 +31,7 @@ export default function HomePage() {
       .then((next) => {
         setGraph(next);
         setError("");
-        setFocus((current) => current || (next.cases.some((item) => item.id === "C01") ? "C01" : next.cases[0]?.id ?? null));
-        setSelected((current) => {
-          const preferred = next.nodes.find((node) => node.label === "PO-C01-1123") || next.nodes.find((node) => node.case_id === "C01" && !node.redacted);
-          if (current && next.nodes.some((node) => node.id === current)) return current;
-          return preferred?.id ?? next.nodes[0]?.id ?? null;
-        });
+        setSelected((current) => (current && next.nodes.some((node) => node.id === current) ? current : null));
       })
       .catch((reason: Error) => setError(reason.message));
   }, [actorId, asOf, mode, job?.status, pulse]);
@@ -53,9 +48,8 @@ export default function HomePage() {
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status]);
 
-  const shown = visibleGraph(graph, focus);
-  const shownNodes = shown.nodes;
-  const shownEdges = shown.edges;
+  const shownNodes = graph?.nodes || [];
+  const shownEdges = graph?.edges || [];
   const node = shownNodes.find((item) => item.id === selected) || null;
   const activeCase = graph?.cases.find((item) => item.id === (focus || node?.case_id)) || null;
   const actors = graph?.actors.length ? graph.actors : [{ id: actorId, name: "Finance", role: "accountant" }];
@@ -110,6 +104,7 @@ export default function HomePage() {
         ) : null}
         <EvidenceGraph nodes={shownNodes} edges={shownEdges} selected={selected} focused={focus} onSelect={setSelected} />
         <div className="legend">
+          <span><i className="swatch supports" /> Mentions</span>
           <span><i className="swatch supports" /> Supports</span>
           <span><i className="swatch reconciles" /> Reconciles</span>
           <span><i className="swatch contradicts" /> Contradicts</span>
@@ -152,6 +147,10 @@ export default function HomePage() {
           ))}
         </div>
         <div className="case-list">
+          <button className={focus ? "" : "primary"} onClick={() => setFocus(null)}>
+            <strong>All cases</strong>
+            <span>{graph ? `${graph.nodes.length} documents` : ""}</span>
+          </button>
           {(graph?.cases || []).map((item) => (
             <button key={item.id} className={focus === item.id ? "primary" : ""} onClick={() => chooseCase(item.id)}>
               <strong>{item.id}</strong>
@@ -172,20 +171,3 @@ function filteredDocuments(graph: CompanyGraph | null, query: string) {
     .slice(0, 40);
 }
 
-function visibleGraph(graph: CompanyGraph | null, focus: string | null) {
-  const nodes = graph?.nodes || [];
-  const edges = graph?.edges || [];
-  if (!focus) return { nodes, edges };
-  const ids = new Set(nodes.filter((node) => node.group === focus || node.case_id === focus).map((node) => node.id));
-  for (const edge of edges) {
-    const sourceIn = ids.has(edge.source);
-    const targetIn = ids.has(edge.target);
-    if (sourceIn === targetIn) continue;
-    const other = nodes.find((node) => node.id === (sourceIn ? edge.target : edge.source));
-    if (other?.group === "policy") ids.add(other.id);
-  }
-  return {
-    nodes: nodes.filter((node) => ids.has(node.id)),
-    edges: edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)),
-  };
-}

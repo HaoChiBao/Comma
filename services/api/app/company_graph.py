@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.graph import KIND_NODE
-from app.models import Actor, ArtifactVersion, Case, GraphEdge, IngestJob, IngestStep, SourceArtifact
+from app.models import Actor, ArtifactVersion, Case, GraphEdge, IngestJob, IngestRecord, IngestStep, SourceArtifact
 from app.snapshots import AccessError, get_actor
 from app.temporal import exclusion_reason, money
 
@@ -53,9 +53,9 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
         )
         if reason is None:
             documents.append(_document(version, case_ids, on_graph))
+            nodes.append(_node(version, case_ids, redacted=False))
             if on_graph:
                 linked += 1
-                nodes.append(_node(version, case_ids, redacted=False))
         elif on_graph and view == "auditor" and reason in {"FUTURE_INFORMATION", "INSUFFICIENT_PERMISSION", "NOT_IN_SNAPSHOT"}:
             linked += 1
             nodes.append(_node(version, case_ids, redacted=True))
@@ -75,6 +75,7 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
                     "confidence": edge.confidence,
                 }
             )
+    edges.extend(_mentions(db, versions, node_ids, edges))
     return {
         "organization_id": organization_id,
         "as_of": as_of.isoformat(),
@@ -102,6 +103,40 @@ def company_graph(db: Session, organization_id: str, actor_id: str, as_of: datet
     }
 
 
+def _mentions(db: Session, versions: list[ArtifactVersion], node_ids: set[str], edges: list[dict]) -> list[dict]:
+    by_external = {version.artifact.external_id: f"artifact:{version.id}" for version in versions}
+    version_ids = {version.id for version in versions}
+    linked = {frozenset((edge["source"], edge["target"])) for edge in edges}
+    mentions = []
+    records = db.scalars(select(IngestRecord)).all()
+    for record in records:
+        if record.version_id not in version_ids:
+            continue
+        source = by_external.get(record.external_id)
+        if source not in node_ids:
+            continue
+        for ref in record.references_json or []:
+            target = by_external.get(ref)
+            if not target or target == source or target not in node_ids:
+                continue
+            pair = frozenset((source, target))
+            if pair in linked:
+                continue
+            linked.add(pair)
+            mentions.append(
+                {
+                    "id": f"mn-{record.external_id}-{ref}"[:80],
+                    "source": source,
+                    "target": target,
+                    "type": "MENTIONS",
+                    "inferred": True,
+                    "explanation": "This document names the other record. That does not prove it was used.",
+                    "confidence": "medium",
+                }
+            )
+    return mentions
+
+
 def _document(version: ArtifactVersion, case_ids: list[str], on_graph: bool) -> dict:
     amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
     return {
@@ -119,7 +154,13 @@ def _document(version: ArtifactVersion, case_ids: list[str], on_graph: bool) -> 
 def _node(version: ArtifactVersion, case_ids: list[str], *, redacted: bool) -> dict:
     amount = next((fact.amount_decimal for fact in version.facts if fact.fact_type == "amount"), None)
     kind = version.artifact.kind
-    group = "policy" if kind == "policy" else (case_ids[0] if case_ids else "other")
+    if kind == "policy":
+        group = "policy"
+    elif case_ids:
+        group = case_ids[0]
+    else:
+        group = kind or "other"
+    include_text = bool(case_ids) or kind == "policy"
     return {
         "id": f"artifact:{version.id}",
         "type": "REDACTED" if redacted else KIND_NODE.get(kind, "DOCUMENT"),
@@ -133,7 +174,7 @@ def _node(version: ArtifactVersion, case_ids: list[str], *, redacted: bool) -> d
         "available_from": version.available_from.isoformat() if version.available_from else None,
         "document_date": None if redacted else version.document_date.isoformat(),
         "redacted": redacted,
-        "text": "" if redacted else version.content_text[:360],
+        "text": "" if redacted or not include_text else version.content_text[:360],
     }
 
 

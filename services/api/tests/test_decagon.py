@@ -50,6 +50,8 @@ def test_decagon_analysis_hides_the_invoice_until_december():
     assert "158.00" in {node["amount"] for node in later["nodes"] if node["case_id"] == "C01"}
     assert "8.00" in c01["finding"]
     assert later["corpus"]["documents"] >= 500
+    assert len(later["nodes"]) >= 400
+    assert sum(edge["type"] == "MENTIONS" for edge in later["edges"]) >= 20
     legal = api.get(
         "/api/v1/company-graph",
         params={"actor_id": "actor-decagon-legal", "as_of": "2025-09-30T23:59:00+00:00", "mode": "audit", "view": "agent"},
