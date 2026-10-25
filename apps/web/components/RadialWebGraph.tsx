@@ -423,53 +423,71 @@ export function RadialWebGraph({
     setCrossLinks([]);
   }, [rootId, upstreamTrail, adjacency, nodeMap]);
 
-  // Tidy Horizontal Tree Layout (Constant Flow Left-to-Right)
+  // Stable Directional Tree Layout (Anchored Root, Zero Vertical Shift on Expand)
   const treeNodes = useMemo(() => {
     if (!rootId || visibleIds.size === 0) return [];
 
     const COLUMN_GAP = 230;
-    const ROW_GAP = 50;
+    const ROW_GAP = 52;
 
-    // 1. Assign depths
-    const depths = new Map<string, number>();
-    depths.set(rootId, 0);
+    const coords = new Map<string, Point>();
 
-    function calcDepths(id: string, d: number) {
-      depths.set(id, d);
-      const kids = (treeChildren.get(id) || []).filter((k) => visibleIds.has(k));
-      for (const k of kids) calcDepths(k, d + 1);
-    }
-    calcDepths(rootId, 0);
+    // 1. Root is rock-solid anchored at (0, 0)
+    coords.set(rootId, { x: 0, y: 0 });
 
-    // 2. Tidy Vertical Layout: compute leaf slots in post-order
-    let currentY = 0;
-    const yMap = new Map<string, number>();
+    // 2. Root's direct children (Tier 1) - centered around y = 0
+    const rootKids = (treeChildren.get(rootId) || []).filter((k) => visibleIds.has(k));
+    const numRootKids = rootKids.length;
+    rootKids.forEach((kidId, idx) => {
+      const y = (idx - (numRootKids - 1) / 2) * ROW_GAP;
+      coords.set(kidId, { x: COLUMN_GAP, y });
+    });
 
-    function assignY(id: string) {
-      const kids = (treeChildren.get(id) || []).filter((k) => visibleIds.has(k));
-      if (kids.length === 0) {
-        yMap.set(id, currentY);
-        currentY += ROW_GAP;
-        return;
+    // 3. Deeper tiers: Each branch expands outward to the right from its parent
+    let currentDepthParents = rootKids.filter((id) => openSet.has(id));
+    let depth = 2;
+
+    while (currentDepthParents.length > 0) {
+      const nextDepthParents: string[] = [];
+      const colX = depth * COLUMN_GAP;
+      let lastAllocatedY = -Infinity;
+
+      // Sort parents from top to bottom by their stable Y
+      currentDepthParents.sort((a, b) => (coords.get(a)?.y || 0) - (coords.get(b)?.y || 0));
+
+      for (const pId of currentDepthParents) {
+        const pCoord = coords.get(pId) || { x: (depth - 1) * COLUMN_GAP, y: 0 };
+        const kids = (treeChildren.get(pId) || []).filter((k) => visibleIds.has(k));
+        if (kids.length === 0) continue;
+
+        const numKids = kids.length;
+        // Children branch directly outward from parent, centered around parent's Y
+        let idealStartY = pCoord.y - ((numKids - 1) / 2) * ROW_GAP;
+
+        // Prevent collision with previous sibling branches
+        if (idealStartY < lastAllocatedY + ROW_GAP) {
+          idealStartY = lastAllocatedY + ROW_GAP;
+        }
+
+        kids.forEach((kId, i) => {
+          const kidY = idealStartY + i * ROW_GAP;
+          coords.set(kId, { x: colX, y: kidY });
+          lastAllocatedY = kidY;
+          if (openSet.has(kId)) {
+            nextDepthParents.push(kId);
+          }
+        });
       }
-      for (const k of kids) assignY(k);
-      // Parent Y is vertically centered between first and last child
-      const firstY = yMap.get(kids[0])!;
-      const lastY = yMap.get(kids[kids.length - 1])!;
-      yMap.set(id, (firstY + lastY) / 2);
+
+      currentDepthParents = nextDepthParents;
+      depth++;
     }
-
-    assignY(rootId);
-
-    // 3. Center whole tree vertically
-    const rootY = yMap.get(rootId) || 0;
 
     const result: WebNode[] = [];
     for (const id of Array.from(visibleIds)) {
+      const pt = coords.get(id) || { x: 0, y: 0 };
       const isRoot = id === rootId;
-      const depth = depths.get(id) ?? 0;
-      const x = depth * COLUMN_GAP;
-      const y = (yMap.get(id) ?? 0) - rootY;
+      const d = Math.round(pt.x / COLUMN_GAP);
 
       const isGroup = id.startsWith("group:");
       const groupData = groupNodes.get(id);
@@ -481,9 +499,9 @@ export function RadialWebGraph({
         label: isGroup ? groupData?.label || "Group" : nodeData?.label || id,
         amount: isGroup ? null : nodeData?.amount || null,
         title: isGroup ? `Group of ${groupData?.count} ${groupData?.type}` : nodeData?.title || nodeData?.label,
-        depth,
-        x,
-        y,
+        depth: d,
+        x: pt.x,
+        y: pt.y,
         parentId: treeParents.get(id) || null,
         isRoot,
         isOpen: openSet.has(id),
@@ -688,13 +706,55 @@ export function RadialWebGraph({
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const posMap = useMemo(() => {
-    const map = new Map<string, Point>();
+  // Active animated coordinates & spawning state for outward flow from parent
+  const [animPositions, setAnimPositions] = useState<Map<string, Point>>(new Map());
+  const [spawningIds, setSpawningIds] = useState<Set<string>>(new Set());
+  const prevCoordsRef = useRef<Map<string, Point>>(new Map());
+
+  useEffect(() => {
+    const prevMap = prevCoordsRef.current;
+    const initialMap = new Map<string, Point>();
+    const newlyAdded = new Set<string>();
+
     for (const n of treeNodes) {
-      map.set(n.id, { x: n.x, y: n.y });
+      if (prevMap.has(n.id)) {
+        initialMap.set(n.id, prevMap.get(n.id)!);
+      } else {
+        // Brand new node: spawn right at parent position (flowing outward from parent)
+        const pId = n.parentId || rootId;
+        const pPt = prevMap.get(pId) || { x: 0, y: 0 };
+        initialMap.set(n.id, { x: pPt.x, y: pPt.y });
+        newlyAdded.add(n.id);
+      }
     }
-    return map;
-  }, [treeNodes]);
+
+    setAnimPositions(initialMap);
+
+    if (newlyAdded.size > 0) {
+      setSpawningIds(newlyAdded);
+      // Wait for next frame so DOM mounts at parent coordinates first, then glides to target
+      const rAF = requestAnimationFrame(() => {
+        const targetMap = new Map<string, Point>();
+        for (const n of treeNodes) {
+          targetMap.set(n.id, { x: n.x, y: n.y });
+        }
+        setAnimPositions(targetMap);
+        setSpawningIds(new Set());
+      });
+
+      const nextTargetMap = new Map<string, Point>();
+      for (const n of treeNodes) nextTargetMap.set(n.id, { x: n.x, y: n.y });
+      prevCoordsRef.current = nextTargetMap;
+
+      return () => cancelAnimationFrame(rAF);
+    } else {
+      const nextTargetMap = new Map<string, Point>();
+      for (const n of treeNodes) nextTargetMap.set(n.id, { x: n.x, y: n.y });
+      prevCoordsRef.current = nextTargetMap;
+    }
+  }, [treeNodes, rootId]);
+
+  const posMap = animPositions;
 
   // Spotlight active trail: from root down to selected node, plus immediate children
   const activeTrail = useMemo(() => {
@@ -996,6 +1056,7 @@ export function RadialWebGraph({
               const isSupports = edgeType === "RECONCILES_WITH" || edgeType === "POTENTIALLY_SUPPORTS";
               const isDashed = n.isGroup || edgeType === "POTENTIALLY_SUPPORTS";
 
+              const isSpawning = spawningIds.has(n.id);
               const strokeColor = isContradiction
                 ? "#FA6610"
                 : isSupports
@@ -1005,10 +1066,16 @@ export function RadialWebGraph({
                 : "rgba(13, 13, 12, 0.24)";
 
               const strokeW = isSelected || isHovered ? 2.2 : isContradiction || isSupports ? 1.8 : 1.3;
-              const edgeOpacity = isSelected || isHovered ? 1.0 : isContradiction || isSupports ? 0.95 : 0.65;
+              const edgeOpacity = isSpawning
+                ? 0
+                : isSelected || isHovered
+                ? 1.0
+                : isContradiction || isSupports
+                ? 0.95
+                : 0.65;
 
               // Smooth horizontal cubic bezier curve
-              const dx = c.x - p.x;
+              const dx = Math.max(0, c.x - p.x);
               const cpx1 = p.x + dx * 0.45;
               const cpx2 = c.x - dx * 0.45;
               const pathD = `M ${p.x} ${p.y} C ${cpx1} ${p.y}, ${cpx2} ${c.y}, ${c.x} ${c.y}`;
@@ -1016,6 +1083,7 @@ export function RadialWebGraph({
               return (
                 <path
                   key={`edge-${n.parentId}-${n.id}`}
+                  className="flow-branch-edge"
                   d={pathD}
                   fill="none"
                   stroke={strokeColor}
@@ -1023,7 +1091,9 @@ export function RadialWebGraph({
                   strokeDasharray={isDashed ? "4 4" : "none"}
                   opacity={edgeOpacity}
                   style={{
-                    transition: "stroke 0.15s ease, opacity 0.18s ease",
+                    transition: isSpawning
+                      ? "none"
+                      : "d 260ms cubic-bezier(0.23, 1, 0.32, 1), opacity 200ms cubic-bezier(0.23, 1, 0.32, 1), stroke 0.15s ease",
                   }}
                 />
               );
@@ -1055,8 +1125,9 @@ export function RadialWebGraph({
           })}
 
           {/* 4. Nodes (All Visible, High Contrast, Smooth Staggered Transitions) */}
-          {treeNodes.map((n, idx) => {
+          {treeNodes.map((n) => {
             const pos = posMap.get(n.id) || { x: n.x, y: n.y };
+            const isSpawning = spawningIds.has(n.id);
             const isSelected = selected === n.id;
             const isHovered = hoveredId === n.id;
             const color = getNodeColor(n.type);
@@ -1076,9 +1147,10 @@ export function RadialWebGraph({
                 className="radial-node-group"
                 style={{
                   transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`,
-                  opacity: 1,
-                  transition: "transform 240ms cubic-bezier(0.23, 1, 0.32, 1), opacity 180ms cubic-bezier(0.23, 1, 0.32, 1)",
-                  transitionDelay: `${Math.min(idx * 16, 160)}ms`,
+                  opacity: isSpawning ? 0 : 1,
+                  transition: isSpawning
+                    ? "none"
+                    : "transform 260ms cubic-bezier(0.23, 1, 0.32, 1), opacity 200ms cubic-bezier(0.23, 1, 0.32, 1)",
                   cursor: "pointer",
                 }}
                 onClick={(e) => {
