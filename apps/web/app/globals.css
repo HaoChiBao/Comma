@@ -1061,7 +1061,13 @@ h1, h2, h3 {
 .preview-open { display: block; margin-top: 0.7rem; }
 .node-summary { display: grid; gap: 0.45rem; }
 .node-summary p { margin: 0; }
-.node-summary dt { color: var(--muted); font-size: 0.72rem; margin-top: 0.45rem; }
+.node-summary dt {
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 700;
+  margin-top: 0.55rem;
+  letter-spacing: 0.02em;
+}
 .node-summary dd { margin: 0.1rem 0 0; }
 button.summary-ref {
   display: inline;
@@ -1106,8 +1112,10 @@ button.summary-ref:hover {
 .summary-skeleton-label {
   display: block;
   margin-bottom: 0.28rem;
-  font-size: 0.72rem;
-  color: var(--dim);
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.02em;
 }
 .summary-skeleton-line {
   display: block;
