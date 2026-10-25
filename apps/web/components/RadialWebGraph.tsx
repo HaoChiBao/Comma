@@ -30,6 +30,8 @@ type HistorySnapshot = {
   parentMap: [string, string][];
   childrenMap: [string, string[]][];
   groupMap: [string, any][];
+  rootId?: string;
+  upstreamTrail?: string[];
 };
 
 const TYPE_COLORS: Record<string, string> = {
@@ -56,7 +58,8 @@ function getDistinctNeighbors(
   nodeId: string,
   adjacency: Map<string, Set<string>>,
   nodeMap: Map<string, GraphNode>,
-  visibleIds?: Set<string>
+  visibleIds?: Set<string>,
+  excludeLabels?: Set<string>
 ): GraphNode[] {
   const currentLabel = nodeMap.get(nodeId)?.label || nodeId;
   const rawNeighbors = Array.from(adjacency.get(nodeId) || []).filter((id) => id !== nodeId);
@@ -68,6 +71,7 @@ function getDistinctNeighbors(
     if (!item) continue;
     // Disallow linking to self or mirror records with same label
     if (item.label === currentLabel) continue;
+    if (excludeLabels && excludeLabels.has(item.label)) continue;
 
     const existing = byLabel.get(item.label);
     if (!existing) {
@@ -138,8 +142,9 @@ export function RadialWebGraph({
     return { adjacency: adj, edgeMap: emap };
   }, [edges]);
 
-  // Root ID state
+  // Root ID & Upstream Flow Trail
   const [rootId, setRootId] = useState<string>("");
+  const [upstreamTrail, setUpstreamTrail] = useState<string[]>([]);
   const [spotlightMode, setSpotlightMode] = useState<boolean>(true);
 
   // Root Candidate list for the root picker dropdown: always includes current root
@@ -159,33 +164,6 @@ export function RadialWebGraph({
     }
     return Array.from(map.values());
   }, [nodes, rootId, nodeMap, adjacency]);
-
-  useEffect(() => {
-    if (nodes.length === 0) return;
-
-    if (initialRootId && nodeMap.has(initialRootId)) {
-      setRootId(initialRootId);
-      return;
-    }
-    if (rootId && nodeMap.has(rootId)) return;
-
-    const decision = nodes.find((n) => n.type === "DECISION" || n.label.startsWith("JE"));
-    if (decision) {
-      setRootId(decision.id);
-      return;
-    }
-
-    let best = nodes[0]?.id || "";
-    let bestDeg = -1;
-    for (const n of nodes) {
-      const deg = adjacency.get(n.id)?.size || 0;
-      if (deg > bestDeg) {
-        bestDeg = deg;
-        best = n.id;
-      }
-    }
-    if (best) setRootId(best);
-  }, [initialRootId, nodes, nodeMap, adjacency, rootId]);
 
   // Tree State
   const [treeParents, setTreeParents] = useState<Map<string, string>>(new Map());
@@ -211,9 +189,73 @@ export function RadialWebGraph({
       parentMap: Array.from(treeParents.entries()),
       childrenMap: Array.from(treeChildren.entries()),
       groupMap: Array.from(groupNodes.entries()),
+      rootId,
+      upstreamTrail,
     };
     historyStack.current = [snap, ...historyStack.current].slice(0, 40);
-  }, [visibleIds, openSet, selected, treeParents, treeChildren, groupNodes]);
+  }, [visibleIds, openSet, selected, treeParents, treeChildren, groupNodes, rootId, upstreamTrail]);
+
+  // Handle Root Change & Maintain Flow Lineage
+  const changeRoot = useCallback(
+    (newRoot: string) => {
+      if (!newRoot || !nodeMap.has(newRoot)) return;
+      if (newRoot === rootId) return;
+
+      pushHistory();
+
+      setUpstreamTrail((prevTrail) => {
+        const idx = prevTrail.indexOf(newRoot);
+        if (idx !== -1) {
+          // Navigating backward along the trail
+          return prevTrail.slice(0, idx);
+        }
+        // If moving forward from the current root:
+        if (rootId) {
+          return [...prevTrail, rootId];
+        }
+        return [];
+      });
+
+      setRootId(newRoot);
+      onSelect(newRoot);
+      onRootChange?.(newRoot);
+    },
+    [rootId, nodeMap, onSelect, onRootChange, pushHistory]
+  );
+
+  // Synchronize initialRootId prop from parent
+  useEffect(() => {
+    if (!initialRootId || !nodeMap.has(initialRootId)) return;
+    if (initialRootId === rootId) return;
+    changeRoot(initialRootId);
+  }, [initialRootId, rootId, nodeMap, changeRoot]);
+
+  // Initial Root Determination
+  useEffect(() => {
+    if (nodes.length === 0 || rootId) return;
+
+    if (initialRootId && nodeMap.has(initialRootId)) {
+      setRootId(initialRootId);
+      return;
+    }
+
+    const decision = nodes.find((n) => n.type === "DECISION" || n.label.startsWith("JE"));
+    if (decision) {
+      setRootId(decision.id);
+      return;
+    }
+
+    let best = nodes[0]?.id || "";
+    let bestDeg = -1;
+    for (const n of nodes) {
+      const deg = adjacency.get(n.id)?.size || 0;
+      if (deg > bestDeg) {
+        bestDeg = deg;
+        best = n.id;
+      }
+    }
+    if (best) setRootId(best);
+  }, [initialRootId, nodes, nodeMap, adjacency, rootId]);
 
   // Handle Undo / Back
   const handleBack = useCallback(() => {
@@ -221,6 +263,13 @@ export function RadialWebGraph({
     const [prev, ...rest] = historyStack.current;
     historyStack.current = rest;
 
+    if (prev.rootId && prev.rootId !== rootId) {
+      setRootId(prev.rootId);
+      onRootChange?.(prev.rootId);
+    }
+    if (prev.upstreamTrail) {
+      setUpstreamTrail(prev.upstreamTrail);
+    }
     setVisibleIds(new Set(prev.visibleIds));
     setOpenSet(new Set(prev.openIds));
     setTreeParents(new Map(prev.parentMap));
@@ -228,12 +277,43 @@ export function RadialWebGraph({
     setGroupNodes(new Map(prev.groupMap));
     setCrossLinks([]);
     if (prev.selectedId) onSelect(prev.selectedId);
-  }, [onSelect]);
+  }, [onSelect, rootId, onRootChange]);
+
+  // Upstream Ancestor Nodes (Rendered to the Left of the Root)
+  const upstreamNodes = useMemo(() => {
+    return upstreamTrail.map((uid, index) => {
+      const n = nodeMap.get(uid);
+      const stepsFromRoot = upstreamTrail.length - index;
+      const x = -stepsFromRoot * 210;
+      const y = 0;
+      return {
+        id: uid,
+        label: n?.label || uid,
+        type: n?.type || "DOCUMENT",
+        amount: n?.amount || null,
+        x,
+        y,
+      };
+    });
+  }, [upstreamTrail, nodeMap]);
+
+  // Sibling Alternatives (Grouped at the Bottom Docked Shelf)
+  const siblingAlternatives = useMemo(() => {
+    if (upstreamTrail.length === 0) return [];
+    const lastAncestorId = upstreamTrail[upstreamTrail.length - 1];
+    const distinct = getDistinctNeighbors(lastAncestorId, adjacency, nodeMap);
+    const currentRootLabel = nodeMap.get(rootId)?.label || rootId;
+    const trailSet = new Set(upstreamTrail);
+    return distinct.filter(
+      (n) => n.id !== rootId && n.label !== currentRootLabel && !trailSet.has(n.id)
+    );
+  }, [upstreamTrail, rootId, adjacency, nodeMap]);
 
   // Reset to initial root view
   const handleResetToRoot = useCallback(() => {
     if (!rootId) return;
     pushHistory();
+    setUpstreamTrail([]);
     const distinctNeighbors = getDistinctNeighbors(rootId, adjacency, nodeMap);
 
     const newVisible = new Set<string>([rootId]);
@@ -284,11 +364,18 @@ export function RadialWebGraph({
     onSelect(rootId);
   }, [rootId, adjacency, nodeMap, onSelect, pushHistory]);
 
-  // Initial Population when rootId is set
+  // Populate Forward Flow when rootId or upstreamTrail changes
   useEffect(() => {
     if (!rootId || !nodeMap.has(rootId)) return;
 
-    const distinctNeighbors = getDistinctNeighbors(rootId, adjacency, nodeMap);
+    const upstreamLabels = new Set<string>();
+    for (const uid of upstreamTrail) {
+      const l = nodeMap.get(uid)?.label;
+      if (l) upstreamLabels.add(l);
+    }
+
+    // Exclude upstream ancestors so the path forward strictly points right
+    const distinctNeighbors = getDistinctNeighbors(rootId, adjacency, nodeMap, undefined, upstreamLabels);
     const newVisible = new Set<string>([rootId]);
     const newParents = new Map<string, string>();
     const newChildren = new Map<string, string[]>();
@@ -334,8 +421,7 @@ export function RadialWebGraph({
     setGroupNodes(newGroups);
     setOpenSet(newOpen);
     setCrossLinks([]);
-    historyStack.current = [];
-  }, [rootId, adjacency, nodeMap]);
+  }, [rootId, upstreamTrail, adjacency, nodeMap]);
 
   // Tidy Horizontal Tree Layout (Constant Flow Left-to-Right)
   const treeNodes = useMemo(() => {
@@ -498,8 +584,13 @@ export function RadialWebGraph({
         return;
       }
 
-      // 4. Unopened Node: Check distinct neighbors
-      const distinctNeighbors = getDistinctNeighbors(node.id, adjacency, nodeMap, visibleIds);
+      // 4. Unopened Node: Check distinct neighbors (exclude upstream ancestors so flow points right)
+      const upstreamLabels = new Set<string>();
+      for (const uid of upstreamTrail) {
+        const l = nodeMap.get(uid)?.label;
+        if (l) upstreamLabels.add(l);
+      }
+      const distinctNeighbors = getDistinctNeighbors(node.id, adjacency, nodeMap, visibleIds, upstreamLabels);
 
       // 5. If all distinct neighbors already on screen: draw cross-links and show toast
       if (distinctNeighbors.length === 0) {
@@ -575,6 +666,7 @@ export function RadialWebGraph({
       adjacency,
       nodeMap,
       rootId,
+      upstreamTrail,
       pushHistory,
     ]
   );
@@ -622,8 +714,8 @@ export function RadialWebGraph({
   useEffect(() => {
     if (isPanning.current) return;
 
-    // Anchor root at 130px from stage left
-    const baseAnchorX = 130;
+    // Anchor root at 250px from stage left if upstream origin exists, else 130px
+    const baseAnchorX = upstreamTrail.length > 0 ? 250 : 130;
     const maxVisibleX = treeNodes.reduce((max, n) => Math.max(max, n.x), 0);
     const visibleWidth = Math.max(340, dimensions.w - 440); // 440px reserved for drawer + margins
 
@@ -639,7 +731,7 @@ export function RadialWebGraph({
       if (Math.abs(c.x - targetCamX) < 4 && Math.abs(c.y) < 4) return c;
       return { ...c, x: targetCamX, y: 0 };
     });
-  }, [treeNodes, dimensions.w, camera.k]);
+  }, [treeNodes, upstreamTrail.length, dimensions.w, camera.k]);
 
   const maxDepth = useMemo(() => {
     let m = 0;
@@ -708,9 +800,7 @@ export function RadialWebGraph({
             value={rootId}
             onChange={(e) => {
               const newRoot = e.target.value;
-              setRootId(newRoot);
-              onSelect(newRoot);
-              onRootChange?.(newRoot);
+              changeRoot(newRoot);
             }}
           >
             {rootCandidates.map((cand) => (
@@ -764,12 +854,115 @@ export function RadialWebGraph({
 
       {/* SVG Canvas */}
       <svg className="radial-svg">
+        <defs>
+          <marker
+            id="upstream-flow-arrow"
+            viewBox="0 0 10 10"
+            refX="7"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto"
+          >
+            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#FA6610" />
+          </marker>
+        </defs>
         <g
           style={{
             transform: `translate3d(${dimensions.w / 2 + camera.x}px, ${dimensions.h / 2 + camera.y}px, 0) scale(${camera.k})`,
             transition: isPanning.current ? "none" : "transform 260ms cubic-bezier(0.23, 1, 0.32, 1)",
           }}
         >
+          {/* 0. Upstream Flow Connectors (From Left Origin into Current Root) */}
+          {upstreamNodes.map((un, idx) => {
+            const nextX = idx < upstreamNodes.length - 1 ? upstreamNodes[idx + 1].x : 0;
+            const nextY = idx < upstreamNodes.length - 1 ? upstreamNodes[idx + 1].y : 0;
+            return (
+              <line
+                key={`upstream-flow-${un.id}`}
+                x1={un.x}
+                y1={un.y}
+                x2={nextX - 16}
+                y2={nextY}
+                stroke="#FA6610"
+                strokeWidth={1.8}
+                strokeDasharray="4 4"
+                opacity={0.75}
+                markerEnd="url(#upstream-flow-arrow)"
+              />
+            );
+          })}
+
+          {/* 0b. Upstream Origin Nodes on the Left */}
+          {upstreamNodes.map((un) => {
+            const isSelected = selected === un.id;
+            const isHovered = hoveredId === un.id;
+            const color = getNodeColor(un.type);
+            return (
+              <g
+                key={`upstream-node-${un.id}`}
+                className="radial-node-group"
+                style={{
+                  transform: `translate3d(${un.x}px, ${un.y}px, 0)`,
+                  cursor: "pointer",
+                  transition: "transform 240ms cubic-bezier(0.23, 1, 0.32, 1)",
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  changeRoot(un.id);
+                }}
+                onPointerEnter={() => setHoveredId(un.id)}
+                onPointerLeave={() => setHoveredId(null)}
+              >
+                {/* Origin indicator badge above node */}
+                <text
+                  x={0}
+                  y={-17}
+                  textAnchor="middle"
+                  fill="#FA6610"
+                  fontSize={9}
+                  fontWeight={700}
+                  letterSpacing="0.06em"
+                  fontFamily="'Saans', -apple-system, BlinkMacSystemFont, sans-serif"
+                >
+                  ↶ ORIGIN
+                </text>
+
+                {/* Dashed outer boundary ring */}
+                <circle
+                  r={15}
+                  fill="none"
+                  stroke="#FA6610"
+                  strokeWidth={1.2}
+                  strokeDasharray="3 3"
+                  opacity={0.6}
+                />
+
+                {/* Node Circle */}
+                <circle
+                  r={10}
+                  fill="#FFFFFF"
+                  stroke={isSelected || isHovered ? "#0D0D0C" : color}
+                  strokeWidth={isSelected ? 2.5 : 2}
+                />
+                <circle r={3} fill={color} />
+
+                {/* Label */}
+                <text
+                  x={16}
+                  y={4}
+                  textAnchor="start"
+                  className="radial-node-label"
+                  fill="#0D0D0C"
+                  fontWeight={isSelected ? 700 : 600}
+                  fontSize={11.5}
+                  fontFamily="'Saans', -apple-system, BlinkMacSystemFont, sans-serif"
+                >
+                  {un.label} {un.amount ? `· $${un.amount}` : ""}
+                </text>
+              </g>
+            );
+          })}
           {/* 1. Subtle Column Tier Dividers */}
           {Array.from({ length: maxDepth + 1 }).map((_, idx) => {
             const x = idx * 230;
@@ -948,6 +1141,33 @@ export function RadialWebGraph({
           })}
         </g>
       </svg>
+
+      {/* 5. Alternative Siblings Shelf Docked at Bottom */}
+      {siblingAlternatives.length > 0 && (
+        <div className="flow-alt-shelf">
+          <div className="shelf-title">
+            <span>↶ From {nodeMap.get(upstreamTrail[upstreamTrail.length - 1])?.label || "Origin"}:</span>
+          </div>
+          <div className="shelf-chips">
+            {siblingAlternatives.map((alt) => {
+              const isSelected = selected === alt.id;
+              return (
+                <button
+                  key={alt.id}
+                  className={`shelf-chip ${isSelected ? "selected" : ""}`}
+                  onClick={() => onSelect(alt.id)}
+                  onDoubleClick={() => changeRoot(alt.id)}
+                  title={`Click to inspect ${alt.label}. Double-click to set as flow root.`}
+                >
+                  <span className="chip-dot" style={{ background: getNodeColor(alt.type) }} />
+                  <span className="chip-label">{alt.label}</span>
+                  {alt.amount && <span className="chip-amt">${alt.amount}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
