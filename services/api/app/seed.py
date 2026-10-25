@@ -4,30 +4,14 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AccessGrant, Actor, ArtifactVersion, Case, CellSourceLink, Fact, GraphEdge, Organization, SourceArtifact, WorkbookCell
-from app.seed_data import (
-    JORDAN,
-    MAYA,
-    ORG,
-    ORG_BETA,
-    RILEY,
-    WORKBOOK_CASE,
-    WORKBOOK_ID,
-    WORKBOOK_PERIOD,
-    WORKBOOK_SHEET,
-    workbook_world,
-    world,
-)
+from app.models import AccessGrant, Actor, ArtifactVersion, Case, Fact, GraphEdge, Organization, SourceArtifact
+from app.seed_data import JORDAN, MAYA, ORG, ORG_BETA, RILEY, world
 from app.temporal import utc
 
 
 def seed(db: Session) -> None:
-    if not db.scalar(select(Organization.id).limit(1)):
-        _seed_world(db)
-    seed_workbook(db)
-
-
-def _seed_world(db: Session) -> None:
+    if db.scalar(select(Organization.id).limit(1)):
+        return
     db.add_all(
         [
             Organization(id=ORG, name="Acme Corp"),
@@ -48,52 +32,6 @@ def _seed_world(db: Session) -> None:
     for case in cases:
         _add_case(db, case)
     db.commit()
-
-
-def seed_workbook(db: Session) -> None:
-    """Adds the Excel demo case. Runs on an existing database too, once."""
-    if db.get(Case, WORKBOOK_CASE) is not None:
-        return
-    versions, case, cells, links = workbook_world()
-    _add_versions(db, versions)
-    _add_case(db, case)
-    db.flush()
-    for cell in cells:
-        db.add(
-            WorkbookCell(
-                id=cell_id(WORKBOOK_ID, WORKBOOK_SHEET, cell["address"]),
-                organization_id=ORG,
-                workbook_id=WORKBOOK_ID,
-                case_id=WORKBOOK_CASE,
-                sheet_name=WORKBOOK_SHEET,
-                address=cell["address"],
-                value_json={"amount": cell["value"]},
-                formula=cell["formula"],
-                period=WORKBOOK_PERIOD,
-                currency="USD",
-                vendor_name=cell["vendor_name"],
-                vendor_ref=cell["vendor_ref"],
-                reference=cell["reference"],
-            )
-        )
-    db.flush()
-    for address, fact_id, relationship, status, basis in links:
-        db.add(
-            CellSourceLink(
-                id=f"link-{address}-{fact_id}",
-                cell_id=cell_id(WORKBOOK_ID, WORKBOOK_SHEET, address),
-                fact_id=fact_id,
-                relationship_type=relationship,
-                status=status,
-                confidence="high" if status == "verified" else "medium",
-                basis=basis,
-            )
-        )
-    db.commit()
-
-
-def cell_id(workbook_id: str, sheet_name: str, address: str) -> str:
-    return f"{workbook_id}:{sheet_name}!{address}"
 
 
 def _add_versions(db: Session, versions: list[dict]) -> None:
@@ -257,7 +195,6 @@ def _vendor(case_id: str) -> str:
         "CASE-008": "Apex Freight",
         "CASE-009": "Cloud Services Inc.",
         "CASE-010": "Cloud Services Inc.",
-        "CASE-011": "Cloud Services Inc.",
     }[case_id]
 
 

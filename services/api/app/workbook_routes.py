@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from app import workbook
 from app.db import db_session
-from app.seed_data import MAYA
 
 router = APIRouter(prefix="/v1")
 
@@ -23,7 +22,7 @@ class InspectIn(BaseModel):
     vendor_id: str | None = None
     period: str | None = None
     as_of: datetime
-    actor_id: str = MAYA
+    actor_id: str | None = None
 
 
 class ScanCellIn(BaseModel):
@@ -38,7 +37,7 @@ class ScanIn(BaseModel):
     range_address: str | None = None
     cells: list[ScanCellIn]
     as_of: datetime
-    actor_id: str = MAYA
+    actor_id: str | None = None
 
 
 @router.post("/traces/inspect")

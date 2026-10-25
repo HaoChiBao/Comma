@@ -15,16 +15,24 @@ export function LineageGraph({ graph, onSelectNode }: { graph: TraceGraph; onSel
           const to = placed.get(edge.target);
           if (!from || !to) return null;
           const style = edgeStyle(edge);
-          const forward = from.x <= to.x;
-          const x1 = forward ? from.x + NODE_W : from.x;
-          const x2 = forward ? to.x : to.x + NODE_W;
           const y1 = from.y + NODE_H / 2;
           const y2 = to.y + NODE_H / 2;
-          const mid = (x1 + x2) / 2;
+          let d: string;
+          if (from.x === to.x) {
+            // Two sources in the same column (a mention or a possible origin): arc into the gap on the left.
+            const bulge = from.x - 22;
+            d = `M${from.x},${y1} C${bulge},${y1} ${bulge},${y2} ${to.x},${y2}`;
+          } else {
+            const forward = from.x < to.x;
+            const x1 = forward ? from.x + NODE_W : from.x;
+            const x2 = forward ? to.x : to.x + NODE_W;
+            const mid = (x1 + x2) / 2;
+            d = `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`;
+          }
           return (
             <path
               key={edge.id}
-              d={`M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`}
+              d={d}
               fill="none"
               stroke={style.stroke}
               strokeDasharray={style.dash}
@@ -59,7 +67,7 @@ export function LineageGraph({ graph, onSelectNode }: { graph: TraceGraph; onSel
         ))}
       </svg>
       <div className="legend">
-        {(["FORMULA_DEPENDS_ON", "SUPPORTED_BY", "CONFLICTS_WITH", "POSSIBLY_RELATED_TO", "EXCLUDED"] as const).map((type) => {
+        {(["FORMULA_DEPENDS_ON", "SUPPORTED_BY", "RECORDED_AS", "CONFLICTS_WITH", "POSSIBLY_RELATED_TO", "MENTIONS", "EXCLUDED"] as const).map((type) => {
           const style = edgeStyle({ id: type, source: "", target: "", type, verified: true, inferred: false });
           return (
             <span key={type}>

@@ -1,4 +1,4 @@
-import type { InspectRequest, ScanRequest, ScanResult, SourceDetail, Trace, TraceGraph } from "../types";
+import type { Actor, InspectRequest, ScanRequest, ScanResult, SourceDetail, Trace, TraceGraph } from "../types";
 
 declare const WORLDSTATE_API_URL: string;
 
@@ -25,6 +25,7 @@ const MESSAGES: Record<string, string> = {
   NOT_IN_SNAPSHOT: "That source is not part of this snapshot.",
   WORKBOOK_NOT_FOUND: "This workbook is not registered with WorldState.",
   TRACE_NOT_FOUND: "That trace no longer exists. Inspect the cell again.",
+  INDEX_NOT_READY: "WorldState is still reading the company documents. Try again in a moment.",
   INVALID_CELL: "Select a single cell.",
   RANGE_TOO_LARGE: "Select at most 200 cells to scan.",
 };
@@ -64,6 +65,7 @@ export function createClient(baseUrl = API_URL, fetchImpl: typeof fetch = (...ar
 
   return {
     health: () => request<{ status: string }>("/health"),
+    actors: () => request<Actor[]>("/api/v1/actors"),
     inspect: (body: InspectRequest) => request<Trace>("/v1/traces/inspect", { method: "POST", body: JSON.stringify(body) }),
     scan: (body: ScanRequest) => request<ScanResult>("/v1/workbooks/scan", { method: "POST", body: JSON.stringify(body) }),
     graph: (traceId: string) => request<TraceGraph>(`/v1/traces/${encodeURIComponent(traceId)}/graph`),

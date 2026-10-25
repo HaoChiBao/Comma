@@ -1,37 +1,62 @@
 {
-  "workbook_id": "demo-accruals-v1",
+  "workbook_id": "decagon-accruals-2025-09",
   "sheet_name": "Accruals",
-  "scan_range": "A1:F11",
+  "scan_range": "A1:H11",
   "as_of": {
-    "september": "2025-09-30T23:59:59-07:00",
-    "december": "2025-12-15T12:00:00-08:00"
+    "september": "2025-09-30T23:59:00+00:00",
+    "december": "2025-12-15T12:00:00+00:00"
+  },
+  "rows": {
+    "C01": {"row": 2, "accrual": "150.00", "po": "145.00"},
+    "C04": {"row": 5, "accrual": "2250.00", "po": null},
+    "C07": {"row": 8, "accrual": "1200.00", "po": "1200.00"}
   },
   "flags": {
-    "D3": {"status": "review", "cause": "EM-208 vendor email ($160.00, received Sep 25) disagrees with the $150.00 accrual."},
-    "D5": {"status": "unknown", "cause": "Manual $980.00 with no source on file."},
-    "D6": {"status": "review", "cause": "Lattice Office cites PO-104, which belongs to Cloud Services Inc. (also cited on D3)."}
-  },
-  "controls": {
-    "D2": "PO-221 matches exactly.",
-    "D4": "PO-331 matches exactly.",
-    "D7": "PO-450 matches. EM-451 is in EUR and is not compared.",
-    "D8": "PO-460 matches. EM-461 covers October and is not compared.",
-    "D9": "PO-470 matches. EM-471 ($252.00) is within tolerance.",
-    "D10": "PO-480 matches exactly.",
-    "D11": "PO-490 matches exactly."
-  },
-  "temporal": {
-    "INV-104:v1": {
-      "document_date": "2025-09-29",
-      "available_at": "2025-12-10T17:00:00+00:00",
-      "september": "excluded",
-      "december": "available"
+    "actor-decagon-finance": {
+      "september": {
+        "F2": {"status": "review", "cause": "C01: vendor email MSG-0001 ($160, Sep 25) and PO-C01-1123 ($145) both differ from the $150 accrual. The $158 invoice arrives Dec 10 and is withheld."},
+        "F3": {"status": "review", "cause": "C02: email MSG-0002 ($1,020) and PO ($980) differ from $990."},
+        "F4": {"status": "review", "cause": "C03: email MSG-0003 ($4,500) differs from $4,200; the contract amendment arrives Oct 2."},
+        "F5": {"status": "review", "cause": "C04: no purchase order is on file; contract CTR-0004 ($367.16) differs from $2,250."},
+        "F6": {"status": "review", "cause": "C05: PO ($6,000), email ($6,100), and contract ($6,000) all differ from $6,400."},
+        "F10": {"status": "review", "cause": "C09: PO and email ($4,700) differ from $4,400; the correction JE-ADJ-C09 comes after close."},
+        "F11": {"status": "review", "cause": "C10: email MSG-0010 ($5,300) differs from $5,000. The instruction inside the email does not change the status."}
+      },
+      "december": {
+        "F2": {"status": "review", "cause": "C01: the invoice ($158) is now visible and also differs."},
+        "F3": {"status": "review", "cause": "C02"},
+        "F4": {"status": "review", "cause": "C03"},
+        "F5": {"status": "review", "cause": "C04"},
+        "F6": {"status": "review", "cause": "C05"},
+        "F8": {"status": "review", "cause": "C07: invoice INV-C07-381 ($2,100, Oct 11) differs from $1,200."},
+        "F9": {"status": "review", "cause": "C08: invoice INV-C08-381 ($430, Oct 10) differs from $420."},
+        "F10": {"status": "review", "cause": "C09"},
+        "F11": {"status": "review", "cause": "C10"}
+      }
+    },
+    "actor-decagon-auditor": {
+      "september": {
+        "F2": {"status": "review", "cause": "C01"},
+        "F3": {"status": "review", "cause": "C02"},
+        "F4": {"status": "review", "cause": "C03"},
+        "F5": {"status": "review", "cause": "C04"},
+        "F6": {"status": "review", "cause": "C05"},
+        "F8": {"status": "review", "cause": "C07: the auditor can read restricted contract CTR-0007 ($2,100); the accountant cannot."},
+        "F10": {"status": "review", "cause": "C09"},
+        "F11": {"status": "review", "cause": "C10"}
+      }
     }
   },
-  "source_links": {
-    "B3": ["PO-104 line 1"],
-    "C3": ["PO-104 line 2"],
-    "D3": ["PO-104 total (verified)", "EM-208 (candidate)", "INV-104 (candidate)"],
-    "D6": ["PO-104 total (verified by Ref column, wrong vendor)"]
+  "controls": {
+    "actor-decagon-finance": {
+      "september": ["E2", "E3", "E4", "E6", "E7", "E8", "E9", "E10", "E11", "F7", "F8", "F9"],
+      "december": ["E2", "E3", "E4", "E6", "E7", "E8", "E9", "E10", "E11", "F7"]
+    }
+  },
+  "temporal": {
+    "INV-C01-381": {"document_date": "2025-09-28", "available_at": "2025-12-10T10:00:00Z", "september": "excluded", "december": "available"}
+  },
+  "roles": {
+    "CTR-0007": {"actor-decagon-finance": "excluded", "actor-decagon-auditor": "available", "actor-decagon-legal": "available"}
   }
 }

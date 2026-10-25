@@ -7,7 +7,7 @@ const webpack = require("webpack");
 const DEV_URL = "https://localhost:3001/";
 // Set ADDIN_PUBLIC_URL when hosting the built pane somewhere other than the dev server.
 const PROD_URL = process.env.ADDIN_PUBLIC_URL || DEV_URL;
-// Empty means same origin; in development the dev server proxies the API below.
+// Empty means same origin; in development the dev server proxies /v1, /api and /health to the API below.
 const API_URL = process.env.WORLDSTATE_API_URL || "";
 const API_PROXY = process.env.WORLDSTATE_API_PROXY || "http://localhost:8000";
 
@@ -46,7 +46,7 @@ module.exports = async (env, options) => {
         options: env.WEBPACK_BUILD || options.https !== undefined ? options.https : await devCerts.getHttpsServerOptions(),
       },
       port: Number(process.env.npm_package_config_dev_server_port || 3001),
-      proxy: [{ context: ["/v1", "/health"], target: API_PROXY, changeOrigin: true }],
+      proxy: [{ context: ["/v1", "/api", "/health"], target: API_PROXY, changeOrigin: true }],
     },
   };
 };

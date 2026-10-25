@@ -34,8 +34,11 @@ def _load_company(db) -> None:
     def _index() -> None:
         from app.graphstore.store import ensure_company_index
 
+        from app.ingest.decagon_workbook import ensure_workbook
+
         with session() as database:
             ensure_company_index(database)
+            ensure_workbook(database)
 
     threading.Thread(target=_index, name="worldstate-index", daemon=True).start()
 

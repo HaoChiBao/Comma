@@ -16,20 +16,25 @@ The graph draws `DERIVED_FROM` only for the seeded formula on purchase order `PO
 
 ## Excel cell traces
 
-The Excel add-in sends one cell's context to `POST /v1/traces/inspect`: address, raw value, formula, and direct precedents. It does not send the workbook. Formula lineage (`FORMULA_DEPENDS_ON`) comes only from Office.js precedents. The server labels it verified and never infers it.
+The Excel add-in sends one cell's context to `POST /v1/traces/inspect`: address, raw value, formula, direct precedents, `as_of`, and `actor_id`. It does not send the workbook. Formula lineage (`FORMULA_DEPENDS_ON`) comes only from Office.js precedents. The server labels it verified and never infers it.
 
-Source evidence comes from `cell_source_links`. Each link is either:
-- `verified`: the Ref column or a PO line.
-- `candidate`: same vendor and period, with no proof the preparer used it.
+**The registry.** The Decagon accruals workbook registers itself in `workbook_cells` once the company ingest completes (`ingest/decagon_workbook.py`). Each registered cell keeps its row's accrual, PO, and invoice ids on the server.
 
-Every linked source passes through the same snapshot allowlist (`guarded_version`). A source outside the snapshot returns only its id and the denial reason.
+**Evidence** comes from what ingest stored, not from hand-written links (`app/workbook.py`, `find_links`):
+- `verified`: the documents with the row's own ids. The posted accrual journal is `RECORDED_AS`; it is the entry being checked, not support for it.
+- `candidate`: documents that mention the PO or the invoice (`mentions`), and contracts filed under the row's vendor (resolved aliases). Contracts never name the PO.
 
-Comparisons use `Decimal` and require the same currency, period, and vendor. The tolerance is the larger of $1 and 1% (`WORLDSTATE_TOLERANCE_ABS`, `WORLDSTATE_TOLERANCE_PCT`). Statuses:
-- **Review**: a comparable source differs beyond tolerance, or the reference belongs to another vendor.
-- **Unknown**: no source is on file or available.
-- **Supported**: a verified link agrees with the cell.
+**Time and role filter.** Every linked document passes through one organization-wide snapshot (`create_org_snapshot`, `guarded_version`). The snapshot is frozen per actor and `as_of`, and is not tied to a case. A source outside it returns only its id and the denial reason. Ledger rows are facts on their document's version, so they are sealed with it.
 
-Highlights change fill color only. The add-in keeps a ledger of the fills it replaced in the workbook's add-in settings, and **Clear** restores them.
+**Origin.** The stored origin claim for an accrual (`claims`: `derived_from`, `source_candidate`, `unexplained`) is shown only when `knowable_from` is no later than `as_of` and every piece of its evidence is in the snapshot manifest. Otherwise the whole claim is dropped.
+
+**Comparisons** use `Decimal` and require the same currency, and the same period when the source states one. The tolerance is the larger of $1 and 1% (`WORLDSTATE_TOLERANCE_ABS`, `WORLDSTATE_TOLERANCE_PCT`). Statuses:
+- **Review**: the cell differs from its posted entry, or an available source differs beyond tolerance.
+- **Supported**: a verified source, such as the row's purchase order, agrees with the cell.
+- **Unknown**: only candidate evidence agrees, or nothing available accounts for the amount.
+- An unregistered formula cell takes the most serious status of its registered inputs.
+
+**Annotations.** Highlights change fill color only. Notes are written only on flagged cells and start with a WorldState marker. The add-in keeps ledgers of the fills it replaced and the notes it wrote in the workbook's add-in settings. **Clear** restores the fills and deletes only notes that still carry the marker.
 
 The offline investigator is deterministic. The compare endpoint also runs an unrestricted baseline that ignores knowledge time. That baseline is labeled unsafe and is not a path to a proposed financial action.
 

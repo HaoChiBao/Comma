@@ -17,6 +17,8 @@ export function EvidenceList({ trace, onOpenSource }: { trace: Trace; onOpenSour
           <div className="muted">
             {item.kind.replace("_", " ")} · received {formatDate(item.available_at)} · {item.locator}
           </div>
+          {item.ledger_locator ? <div className="muted mono">ledger {item.ledger_locator}</div> : null}
+          <div className="muted">{item.basis}</div>
           <div className="tags">
             <span className={`tag ${item.relationship.toLowerCase()}`}>{RELATIONSHIP_LABEL[item.relationship]}</span>
             <span className={`tag ${item.link_status}`}>{item.link_status === "verified" ? "verified link" : "candidate link"}</span>

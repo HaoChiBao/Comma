@@ -128,7 +128,8 @@ class Snapshot(Base):
     __tablename__ = "snapshots"
     __table_args__ = (UniqueConstraint("case_id", "actor_id", "as_of", "mode", name="uq_snapshot_key"),)
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"))
+    # NULL for an organization-wide snapshot (Excel traces), which no single case scopes.
+    case_id: Mapped[str | None] = mapped_column(ForeignKey("cases.id"), nullable=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
     actor_id: Mapped[str] = mapped_column(ForeignKey("actors.id"))
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -284,17 +285,6 @@ class WorkbookCell(Base):
     vendor_ref: Mapped[str] = mapped_column(String(80))
     reference: Mapped[str] = mapped_column(String(80), default="")
     revision: Mapped[int] = mapped_column(default=1)
-
-
-class CellSourceLink(Base):
-    __tablename__ = "cell_source_links"
-    id: Mapped[str] = mapped_column(String(200), primary_key=True)
-    cell_id: Mapped[str] = mapped_column(ForeignKey("workbook_cells.id"))
-    fact_id: Mapped[str] = mapped_column(ForeignKey("facts.id"))
-    relationship_type: Mapped[str] = mapped_column(String(32))
-    status: Mapped[str] = mapped_column(String(16))
-    confidence: Mapped[str] = mapped_column(String(16), default="high")
-    basis: Mapped[str] = mapped_column(Text, default="")
 
 
 class TraceRun(Base):
