@@ -36,6 +36,9 @@ def _version(
     grants=None,
     source_system="seed",
     formula=None,
+    period=None,
+    currency="USD",
+    extra_facts=None,
 ):
     text = content
     return {
@@ -68,6 +71,9 @@ def _version(
         if grants is None
         else grants,
         "formula": formula,
+        "period": period,
+        "currency": currency,
+        "extra_facts": extra_facts or [],
     }
 
 
@@ -285,3 +291,120 @@ def world():
         ("CASE-010", "pre_decision", "art-je-910", "JE-910:v1", "Pre-decision simulation must hide the recorded accrual until the estimate is committed.", "vendor-cloud", "100.00", ["PO-610:v1", "JE-910:v1"]),
     ]
     return versions, cases
+
+
+WORKBOOK_ID = "demo-accruals-v1"
+WORKBOOK_SHEET = "Accruals"
+WORKBOOK_CASE = "CASE-011"
+WORKBOOK_PERIOD = "2025-09"
+
+# Row, vendor, vendor ref, PO line 1, PO line 2, manual accrual (None means =B+C), source reference.
+WORKBOOK_ROWS = [
+    (2, "Harbor Logistics", "vendor-harbor", "60.00", "20.00", None, "PO-221"),
+    (3, "Cloud Services Inc.", "vendor-cloud", "100.00", "50.00", None, "PO-104"),
+    (4, "Northwind Hosting", "vendor-northwind", "120.00", "80.00", None, "PO-331"),
+    (5, "Summit Data", "vendor-summit", None, None, "980.00", ""),
+    (6, "Lattice Office", "vendor-lattice", "30.00", "15.00", None, "PO-104"),
+    (7, "Meridian Translation", "vendor-meridian", "200.00", "0.00", None, "PO-450"),
+    (8, "Orbit Analytics", "vendor-orbit", "90.00", "0.00", None, "PO-460"),
+    (9, "Keystone Cleaning", "vendor-keystone", "250.00", "0.00", None, "PO-470"),
+    (10, "Vertex Security", "vendor-vertex", "180.00", "130.00", None, "PO-480"),
+    (11, "Pioneer Telecom", "vendor-pioneer", "125.00", "0.00", None, "PO-490"),
+]
+
+
+def _po(external_id, vendor, entity, line_1, line_2, available):
+    total = f"{Decimal(line_1) + Decimal(line_2):.2f}"
+    key = external_id.lower()
+    return _version(
+        f"{external_id}:v1", f"art-{key}", "purchase_order", f"{external_id} {vendor}", external_id,
+        f"Purchase order {external_id} to {vendor}. Line 1 services ${line_1}. Line 2 services ${line_2}. Total ${total}.",
+        available, available,
+        entity=entity, case_ids=[WORKBOOK_CASE], amount=total, locator="total", period=WORKBOOK_PERIOD,
+        extra_facts=[(f"fact-{key}-line-1", line_1, "line 1"), (f"fact-{key}-line-2", line_2, "line 2")],
+    )
+
+
+def workbook_world():
+    """The Excel demo case. Seeded on its own so an existing database can gain it."""
+    versions = [
+        _po("PO-221", "Harbor Logistics", "vendor-harbor", "60.00", "20.00", "2025-09-03T16:00:00+00:00"),
+        _po("PO-104", "Cloud Services Inc.", "vendor-cloud", "100.00", "50.00", "2025-09-12T16:00:00+00:00"),
+        _version(
+            "EM-208:v1", "art-em-208", "email", "Email EM-208 revised estimate", "EM-208",
+            "From Cloud Services Inc. Subject: September usage. Thanks for PO-104.\n\nOur revised estimate for September services is $160.00. This is not an invoice.",
+            "2025-09-25T17:00:00+00:00", "2025-09-25T17:00:00+00:00",
+            entity="vendor-cloud", case_ids=[WORKBOOK_CASE], amount="160.00", locator="message body, paragraph 2", period=WORKBOOK_PERIOD,
+        ),
+        _version(
+            "INV-104:v1", "art-inv-104", "invoice", "Invoice INV-104", "INV-104",
+            "Final invoice INV-104 from Cloud Services Inc. for September services. Amount due $158.00. Document date 29 September 2025. Received by accounting on 10 December 2025.",
+            "2025-09-29T00:00:00+00:00", "2025-12-10T17:00:00+00:00",
+            ingested_at="2025-12-10T17:00:00+00:00",
+            evidence="Accounts payable receipt log, 10 December 2025. Document date is not the availability date.",
+            entity="vendor-cloud", case_ids=[WORKBOOK_CASE], amount="158.00", locator="total", period=WORKBOOK_PERIOD,
+        ),
+        _version(
+            "JE-911:v1", "art-je-911", "journal", "Accruals workbook row 3", "JE-911",
+            "Accruals workbook row 3. Accrual for Cloud Services Inc. recorded at $150.00 on 30 September 2025 as the sum of the two PO-104 lines.",
+            "2025-09-30T23:00:00+00:00", "2025-09-30T23:00:00+00:00",
+            entity="vendor-cloud", case_ids=[WORKBOOK_CASE], amount="150.00", locator="Accruals!D3", period=WORKBOOK_PERIOD,
+        ),
+        _po("PO-331", "Northwind Hosting", "vendor-northwind", "120.00", "80.00", "2025-09-05T16:00:00+00:00"),
+        _po("PO-450", "Meridian Translation", "vendor-meridian", "200.00", "0.00", "2025-09-06T16:00:00+00:00"),
+        _version(
+            "EM-451:v1", "art-em-451", "email", "Email EM-451 euro quote", "EM-451",
+            "Meridian Translation quotes EUR 185.00 for the September glossary work.",
+            "2025-09-20T16:00:00+00:00", "2025-09-20T16:00:00+00:00",
+            entity="vendor-meridian", case_ids=[WORKBOOK_CASE], amount="185.00", currency="EUR", locator="paragraph 1", period=WORKBOOK_PERIOD,
+        ),
+        _po("PO-460", "Orbit Analytics", "vendor-orbit", "90.00", "0.00", "2025-09-07T16:00:00+00:00"),
+        _version(
+            "EM-461:v1", "art-em-461", "email", "Email EM-461 October estimate", "EM-461",
+            "Orbit Analytics estimates $130.00 for October services.",
+            "2025-09-28T16:00:00+00:00", "2025-09-28T16:00:00+00:00",
+            entity="vendor-orbit", case_ids=[WORKBOOK_CASE], amount="130.00", locator="paragraph 1", period="2025-10",
+        ),
+        _po("PO-470", "Keystone Cleaning", "vendor-keystone", "250.00", "0.00", "2025-09-08T16:00:00+00:00"),
+        _version(
+            "EM-471:v1", "art-em-471", "email", "Email EM-471 estimate", "EM-471",
+            "Keystone Cleaning expects September to come in at $252.00.",
+            "2025-09-26T16:00:00+00:00", "2025-09-26T16:00:00+00:00",
+            entity="vendor-keystone", case_ids=[WORKBOOK_CASE], amount="252.00", locator="paragraph 1", period=WORKBOOK_PERIOD,
+        ),
+        _po("PO-480", "Vertex Security", "vendor-vertex", "180.00", "130.00", "2025-09-09T16:00:00+00:00"),
+        _po("PO-490", "Pioneer Telecom", "vendor-pioneer", "125.00", "0.00", "2025-09-10T16:00:00+00:00"),
+    ]
+    case = (
+        WORKBOOK_CASE, "excel_accrual", "art-je-911", "JE-911:v1",
+        "Accruals workbook. Cloud Services Inc. row 3 records $150 for September. A vendor email and a later invoice disagree.",
+        "vendor-cloud", "150.00", ["PO-104:v1", "EM-208:v1", "INV-104:v1", "JE-911:v1"],
+    )
+    cells = []
+    links = []
+    for row, vendor, entity, line_1, line_2, manual, reference in WORKBOOK_ROWS:
+        common = {"vendor_name": vendor, "vendor_ref": entity, "reference": reference}
+        if line_1 is None:
+            cells.append({"address": f"D{row}", "value": manual, "formula": "", **common})
+            continue
+        accrual = f"{Decimal(line_1) + Decimal(line_2):.2f}"
+        cells.append({"address": f"D{row}", "value": accrual, "formula": f"=B{row}+C{row}", **common})
+        links.append((f"D{row}", f"fact-{reference}:v1", "SUPPORTED_BY", "verified", f"Ref column on row {row} cites {reference}"))
+        if row == 6:
+            # Planted mismatch: Lattice Office cites Cloud Services' purchase order. Its lines are not tracked.
+            continue
+        key = reference.lower()
+        cells.append({"address": f"B{row}", "value": line_1, "formula": "", **common})
+        cells.append({"address": f"C{row}", "value": line_2, "formula": "", **common})
+        links.append((f"B{row}", f"fact-{key}-line-1", "SUPPORTED_BY", "verified", f"{reference} line 1"))
+        links.append((f"C{row}", f"fact-{key}-line-2", "SUPPORTED_BY", "verified", f"{reference} line 2"))
+    candidates = [
+        ("D3", "EM-208:v1", "Same vendor and period. The email mentions PO-104."),
+        ("D3", "INV-104:v1", "Same vendor and period. The invoice bills the PO-104 services."),
+        ("D7", "EM-451:v1", "Same vendor. The quote is in euros."),
+        ("D8", "EM-461:v1", "Same vendor. The estimate is for October."),
+        ("D9", "EM-471:v1", "Same vendor and period."),
+    ]
+    for address, version_id, basis in candidates:
+        links.append((address, f"fact-{version_id}", "POSSIBLY_RELATED_TO", "candidate", basis))
+    return versions, case, cells, links

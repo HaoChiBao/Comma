@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WorldState</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1f2328;
+        --muted: #59636e;
+        --line: #d0d7de;
+        --card: #f6f8fa;
+        --accent: #2563eb;
+        --review: #fff3cd;
+        --review-fg: #7a4d00;
+        --unknown: #e2e3e5;
+        --unknown-fg: #41464b;
+        --supported: #dcfce7;
+        --supported-fg: #166534;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
+      main { padding: 10px 12px 24px; }
+      button { font: inherit; cursor: pointer; }
+      button:disabled { cursor: default; opacity: 0.55; }
+      .top { display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+      .brand { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; display: inline-block; }
+      .dot.ready { background: #16a34a; }
+      .dot.down { background: #dc2626; }
+      .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+      .actions button { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 5px 10px; }
+      .actions button:first-child { background: var(--accent); color: #fff; border-color: var(--accent); }
+      .asof { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+      .chip { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 2px 10px; }
+      .chip.on, input.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+      input[type="date"] { border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; font: inherit; }
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0; }
+      .card h3 { margin: 8px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+      .card h3:first-child { margin-top: 0; }
+      .muted { color: var(--muted); font-size: 12px; }
+      .mono, code, pre { font-family: ui-monospace, "Cascadia Code", Menlo, monospace; }
+      .cell-head { display: flex; justify-content: space-between; align-items: baseline; }
+      .cell-key { font-weight: 600; }
+      .cell-value { font-size: 22px; font-weight: 600; margin: 2px 0; }
+      .formula { display: inline-block; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+      .lineage { margin: 6px 0 0; }
+      .link { background: none; border: none; color: var(--accent); padding: 0; text-decoration: underline; }
+      .finding.review { background: var(--review); border-color: #f0d58c; }
+      .finding.unknown { background: var(--unknown); }
+      .finding.supported { background: var(--supported); border-color: #a7e3bb; }
+      .finding p { margin: 6px 0 0; }
+      .finding-head { display: flex; gap: 8px; align-items: center; }
+      .badge { border-radius: 4px; padding: 1px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+      .badge.review { background: #f5c451; color: #4a2f00; }
+      .badge.unknown { background: #adb5bd; color: #1f2328; }
+      .badge.supported { background: #4ade80; color: #052e16; }
+      .unknowns { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
+      .evidence { display: block; width: 100%; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 6px 0; color: inherit; }
+      .evidence.conflict { border-color: #e0a72e; }
+      .evidence.blocked { background: repeating-linear-gradient(135deg, #f3f4f6, #f3f4f6 6px, #e5e7eb 6px, #e5e7eb 12px); }
+      .evidence-head { display: flex; justify-content: space-between; gap: 8px; }
+      .amount { font-weight: 600; }
+      .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+      .tag { font-size: 11px; border-radius: 4px; padding: 0 5px; background: var(--card); border: 1px solid var(--line); }
+      .tag.conflicts_with { background: var(--review); color: var(--review-fg); }
+      .tag.supported_by { background: var(--supported); color: var(--supported-fg); }
+      .tag.candidate { border-style: dashed; }
+      .graph { width: 100%; height: auto; display: block; }
+      .node rect { fill: #fff; stroke: #94a3b8; }
+      .node { cursor: pointer; }
+      .node.selected rect { stroke: var(--accent); stroke-width: 2; }
+      .node.selected.review rect { fill: var(--review); }
+      .node.blocked rect { fill: #f3f4f6; stroke-dasharray: 3 3; }
+      .node.spreadsheetcell rect { fill: #eff6ff; }
+      .node-label { font-size: 11px; font-weight: 600; fill: var(--fg); }
+      .node-sub { font-size: 10px; fill: var(--muted); }
+      .legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--muted); margin-top: 6px; }
+      .legend span { display: inline-flex; gap: 4px; align-items: center; }
+      .source-text { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px; font-size: 12px; }
+      .facts { margin: 4px 0; padding-left: 16px; }
+      .status { color: var(--muted); }
+      .error { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 6px 8px; }
+      .notice { color: #1e40af; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 6px 8px; }
+      .intro { margin-top: 16px; }
+      footer { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #1f1f1f; --fg: #e6edf3; --muted: #9da7b3; --line: #3d444d; --card: #262626; --review: #4a3b12; --review-fg: #ffd877; --unknown: #34373b; --unknown-fg: #d0d4d8; --supported: #173b26; --supported-fg: #86efac; }
+        .node rect { fill: #2b2b2b; }
+        .node.spreadsheetcell rect { fill: #1e293b; }
+        .node.blocked rect { fill: #2a2a2a; }
+        .evidence.blocked { background: repeating-linear-gradient(135deg, #2a2a2a, #2a2a2a 6px, #333 6px, #333 12px); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

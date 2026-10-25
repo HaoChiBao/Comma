@@ -250,3 +250,48 @@ class GraphEpisode(Base):
     reference_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     backend: Mapped[str] = mapped_column(String(32))
     record_id: Mapped[str] = mapped_column(String(64))
+
+
+class WorkbookCell(Base):
+    __tablename__ = "workbook_cells"
+    __table_args__ = (UniqueConstraint("workbook_id", "sheet_name", "address", name="uq_workbook_cell"),)
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    workbook_id: Mapped[str] = mapped_column(String(80))
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"))
+    sheet_name: Mapped[str] = mapped_column(String(80))
+    address: Mapped[str] = mapped_column(String(16))
+    value_json: Mapped[dict] = mapped_column(JSON)
+    formula: Mapped[str] = mapped_column(Text, default="")
+    period: Mapped[str] = mapped_column(String(16))
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    vendor_name: Mapped[str] = mapped_column(String(200))
+    vendor_ref: Mapped[str] = mapped_column(String(80))
+    reference: Mapped[str] = mapped_column(String(80), default="")
+    revision: Mapped[int] = mapped_column(default=1)
+
+
+class CellSourceLink(Base):
+    __tablename__ = "cell_source_links"
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    cell_id: Mapped[str] = mapped_column(ForeignKey("workbook_cells.id"))
+    fact_id: Mapped[str] = mapped_column(ForeignKey("facts.id"))
+    relationship_type: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16))
+    confidence: Mapped[str] = mapped_column(String(16), default="high")
+    basis: Mapped[str] = mapped_column(Text, default="")
+
+
+class TraceRun(Base):
+    __tablename__ = "trace_runs"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    workbook_id: Mapped[str] = mapped_column(String(80))
+    cell_key: Mapped[str] = mapped_column(String(120))
+    actor_id: Mapped[str] = mapped_column(ForeignKey("actors.id"))
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("snapshots.id"))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    manifest_hash: Mapped[str] = mapped_column(String(64))
+    result_json: Mapped[dict] = mapped_column(JSON)
+    graph_json: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

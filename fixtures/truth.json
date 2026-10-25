@@ -1,0 +1,37 @@
+{
+  "workbook_id": "demo-accruals-v1",
+  "sheet_name": "Accruals",
+  "scan_range": "A1:F11",
+  "as_of": {
+    "september": "2025-09-30T23:59:59-07:00",
+    "december": "2025-12-15T12:00:00-08:00"
+  },
+  "flags": {
+    "D3": {"status": "review", "cause": "EM-208 vendor email ($160.00, received Sep 25) disagrees with the $150.00 accrual."},
+    "D5": {"status": "unknown", "cause": "Manual $980.00 with no source on file."},
+    "D6": {"status": "review", "cause": "Lattice Office cites PO-104, which belongs to Cloud Services Inc. (also cited on D3)."}
+  },
+  "controls": {
+    "D2": "PO-221 matches exactly.",
+    "D4": "PO-331 matches exactly.",
+    "D7": "PO-450 matches. EM-451 is in EUR and is not compared.",
+    "D8": "PO-460 matches. EM-461 covers October and is not compared.",
+    "D9": "PO-470 matches. EM-471 ($252.00) is within tolerance.",
+    "D10": "PO-480 matches exactly.",
+    "D11": "PO-490 matches exactly."
+  },
+  "temporal": {
+    "INV-104:v1": {
+      "document_date": "2025-09-29",
+      "available_at": "2025-12-10T17:00:00+00:00",
+      "september": "excluded",
+      "december": "available"
+    }
+  },
+  "source_links": {
+    "B3": ["PO-104 line 1"],
+    "C3": ["PO-104 line 2"],
+    "D3": ["PO-104 total (verified)", "EM-208 (candidate)", "INV-104 (candidate)"],
+    "D6": ["PO-104 total (verified by Ref column, wrong vendor)"]
+  }
+}

@@ -16,3 +16,5 @@ services/api/.venv/
 .tmp-decagon/
 worldstate.db
 services/api/worldstate.db
+.npm-cache/
+*.db
