@@ -10,6 +10,7 @@ const PROD_URL = process.env.ADDIN_PUBLIC_URL || DEV_URL;
 // Empty means same origin; in development the dev server proxies /v1, /api and /health to the API below.
 const API_URL = process.env.WORLDSTATE_API_URL || "";
 const API_PROXY = process.env.WORLDSTATE_API_PROXY || "http://localhost:8000";
+const COMMA_WEB_URL = process.env.COMMA_WEB_URL || "";
 
 module.exports = async (env, options) => {
   const dev = options.mode === "development";
@@ -25,7 +26,10 @@ module.exports = async (env, options) => {
       rules: [{ test: /\.tsx?$/, exclude: /node_modules/, use: "ts-loader" }],
     },
     plugins: [
-      new webpack.DefinePlugin({ WORLDSTATE_API_URL: JSON.stringify(API_URL) }),
+      new webpack.DefinePlugin({
+        WORLDSTATE_API_URL: JSON.stringify(API_URL),
+        COMMA_WEB_URL: JSON.stringify(COMMA_WEB_URL),
+      }),
       new HtmlWebpackPlugin({ filename: "taskpane.html", template: "./src/taskpane/taskpane.html", chunks: ["taskpane"] }),
       new HtmlWebpackPlugin({ filename: "commands.html", template: "./src/commands/commands.html", chunks: ["commands"] }),
       new CopyWebpackPlugin({

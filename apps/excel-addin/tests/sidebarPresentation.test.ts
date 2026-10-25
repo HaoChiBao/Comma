@@ -60,6 +60,7 @@ describe("S2c adapter for main trace responses", () => {
     expect(view.headline).toBe(trace.summary);
     expect(view.items.find((item) => item.label === "MSG-0001")).toMatchObject({ relationship: "conflicts", source_id: "MSG-0001:v1", abbr: "EM" });
     expect(view.items.find((item) => item.label === "JE-900")).toMatchObject({ relationship: "context", relationship_text: "Posted entry" });
+    expect(view.full_graph_node_id).toBe("artifact:JE-900:v1");
   });
 
   it("creates formula inputs from main graph edges and the live Excel values", () => {
@@ -85,6 +86,12 @@ describe("S2c adapter for main trace responses", () => {
     expect(encoded).not.toContain("INV-C01-381");
     expect(encoded).not.toContain("158.00");
     expect(view.items.find((item) => item.kind === "withheld")).toMatchObject({ label: "Withheld source", amount: null, relationship: "withheld" });
+  });
+
+  it("does not create a graph target when the cell has no available recorded-as evidence", () => {
+    const withoutPostedEntry = { ...trace, evidence: trace.evidence.filter((item) => item.relationship !== "RECORDED_AS") };
+    const view = toSidebarTrace(withoutPostedEntry, graph, request);
+    expect(view.full_graph_node_id).toBeNull();
   });
 
   it("builds the timeline from available dates and the selected snapshot only", () => {

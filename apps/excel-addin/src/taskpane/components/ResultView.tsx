@@ -5,7 +5,7 @@ import { formatMoney, originLine } from "../view";
 import { KnowledgeGraph } from "./KnowledgeGraph";
 import { StatusDot } from "./StatusDot";
 
-export function ResultView({ trace, vendor, selected, onSelect, onOpenSource, onAddNote, onAction, busy }: { trace: SidebarTrace; vendor: string; selected: string; onSelect: (id: string) => void; onOpenSource: (id: string) => void; onAddNote: (message: string) => Promise<boolean>; onAction: (label: string) => void; busy: boolean }) {
+export function ResultView({ trace, vendor, selected, onSelect, onOpenSource, onOpenFullGraph, onAddNote, onAction, busy }: { trace: SidebarTrace; vendor: string; selected: string; onSelect: (id: string) => void; onOpenSource: (id: string) => void; onOpenFullGraph: () => void; onAddNote: (message: string) => Promise<boolean>; onAction: (label: string) => void; busy: boolean }) {
   const [graphOpen, setGraphOpen] = React.useState(true);
   const [noteOpen, setNoteOpen] = React.useState(false);
   const [noteDraft, setNoteDraft] = React.useState("");
@@ -51,8 +51,7 @@ export function ResultView({ trace, vendor, selected, onSelect, onOpenSource, on
           <button type="button" className="ws-quiet graph-toggle" onClick={() => setGraphOpen(!graphOpen)} aria-expanded={graphOpen}>
             <span className="chev">{graphOpen ? "▾" : "▸"}</span>Knowledge graph <span className="normal">· {countLabel(trace.items)}</span>
           </button>
-          {/* Not wired to anything yet. */}
-          <button type="button" className="ws-sec small-button">
+          <button type="button" className="ws-sec small-button" onClick={onOpenFullGraph}>
             Open full graph
           </button>
         </div>
