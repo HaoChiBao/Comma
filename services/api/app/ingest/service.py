@@ -48,6 +48,7 @@ def create_job(db: Session, organization_id: str, available_from: datetime, file
         updated_at=_now(),
     )
     db.add(job)
+    db.flush()
     for filename, media_type, payload in files:
         if len(payload) > MAX_BYTES:
             raise ValueError(f"{filename} is larger than 1.5 MB.")
@@ -62,6 +63,7 @@ def create_job(db: Session, organization_id: str, available_from: datetime, file
                 content_hash="",
             )
         )
+    db.flush()
     plan_job(db, job)
     db.commit()
     return job

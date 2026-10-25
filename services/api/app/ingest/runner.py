@@ -179,6 +179,7 @@ def _record(db: Session, job: IngestJob, step: IngestStep) -> dict:
         title=f"{record.kind} {record.external_id}",
     )
     db.add(artifact)
+    db.flush()
     db.add(
         ArtifactVersion(
             id=version_id,
@@ -197,6 +198,7 @@ def _record(db: Session, job: IngestJob, step: IngestStep) -> dict:
             metadata_json={"case_ids": [], "entity_ref": record.entity_ref, "formula": record.formula, "job_id": job.id},
         )
     )
+    db.flush()
     for role in ("accountant", "auditor"):
         db.add(
             AccessGrant(
