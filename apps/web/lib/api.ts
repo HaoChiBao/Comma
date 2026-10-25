@@ -1,4 +1,6 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" ? "" : process.env.BACKEND_API_URL || "https://api-production-69e9.up.railway.app");
 
 export type CaseRow = {
   id: string;

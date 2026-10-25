@@ -44,16 +44,26 @@ export default function ComparePage() {
   }
 
   return (
-    <main>
-      <a href={`/cases/${params.id}`}>Back to the graph</a>
-      <h2>Unsafe baseline versus WorldState</h2>
+    <div className="shell">
+      <header className="top">
+        <div className="brand-row">
+          <a href="/" className="brand-title">Comma</a>
+          <span className="brand-tagline">Compare · {params.id}</span>
+        </div>
+        <nav className="nav-links">
+          <a href={`/cases/${params.id}`} className="nav-link">← Case View</a>
+          <a href="/" className="nav-link">Fullscreen Graph</a>
+        </nav>
+      </header>
+      <main>
+        <h2>Unsafe baseline versus Comma</h2>
       <p className="warn">The unrestricted column is an intentionally unsafe baseline. It is never used to propose a financial action.</p>
       <button className="primary" onClick={run}>Compare September 30</button>
       {error ? <p className="bad">{error}</p> : null}
       {result ? (
         <div className="split" style={{ marginTop: "1rem" }}>
           <section className="panel">
-            <h2>WorldState</h2>
+            <h2>Comma</h2>
             <p className="ok">{result.constrained.finding.finding}</p>
             <p>{result.constrained.finding.summary}</p>
             <p>Blocked reads: {result.constrained.finding.blocked_access_attempts}</p>
@@ -67,5 +77,6 @@ export default function ComparePage() {
         </div>
       ) : null}
     </main>
+  </div>
   );
 }

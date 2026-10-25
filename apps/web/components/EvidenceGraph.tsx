@@ -12,15 +12,18 @@ export function EvidenceGraph({
   edges,
   selected,
   focused,
+  viewMode,
   onSelect,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   selected: string | null;
   focused?: string | null;
+  viewMode?: "network" | "structure";
   onSelect: (id: string) => void;
 }) {
-  if (nodes.length > 30) {
+  const isNetwork = viewMode ? viewMode === "network" : nodes.length > 30;
+  if (isNetwork) {
     return <ObsidianGraph nodes={nodes} edges={edges} selected={selected} focused={focused} onSelect={onSelect} />;
   }
   return <CardGraph nodes={nodes} edges={edges} selected={selected} focused={focused} onSelect={onSelect} />;
@@ -40,203 +43,253 @@ function CardGraph({
   onSelect: (id: string) => void;
 }) {
   const frame = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 720, h: 560 });
+  const [size, setSize] = useState({ w: 780, h: 580 });
+  const [draggedPositions, setDraggedPositions] = useState<Record<string, Point>>({});
+
   useEffect(() => {
     const element = frame.current;
     if (!element) return;
-    const measure = () => setSize({ w: element.clientWidth, h: Math.max(element.clientHeight, 520) });
+    const measure = () => setSize({ w: Math.max(element.clientWidth, 720), h: Math.max(element.clientHeight, 540) });
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const signature = `${nodes.length}:${nodes.map((node) => node.group || "").join("|")}`;
-  const arranged = useMemo(() => layout(nodes, size), [signature, size.w, size.h]);
-  const compact = nodes.length > 30;
-  const [positions, setPositions] = useState<Record<string, Point>>(arranged.points);
-  useEffect(() => setPositions(arranged.points), [arranged]);
-  const placed = { ...arranged.points, ...positions };
+
+  const signature = `${nodes.length}:${focused || "all"}:${nodes.map((node) => node.group || "").join("|")}`;
+  const arranged = useMemo(() => layoutNodes(nodes, size, focused), [signature, size.w, size.h, focused]);
+
+  const placed = useMemo(() => {
+    const res: Record<string, Point> = { ...arranged.points };
+    for (const [id, pt] of Object.entries(draggedPositions)) {
+      if (res[id]) res[id] = pt;
+    }
+    return res;
+  }, [arranged.points, draggedPositions]);
+
   const boardWidth = Math.max(arranged.w, size.w);
   const boardHeight = Math.max(arranged.h, size.h);
-  const ox = compact ? 42 : 70;
-  const oy = compact ? 16 : 28;
+  const nodeRadius = 24;
+
   return (
-    <div className={`graph${compact ? " compact" : ""}`} ref={frame} role="group" aria-label="Evidence graph">
+    <div className="graph-container" ref={frame} role="group" aria-label="Evidence knowledge graph">
       <div className="graph-board" style={{ width: boardWidth, height: boardHeight }}>
-      <svg aria-hidden="true" width={boardWidth} height={boardHeight}>
-        {edges.map((edge) => {
-          const from = placed[edge.source];
-          const to = placed[edge.target];
-          if (!from || !to) return null;
+        {/* SVG Bezier S-Curve Connectors */}
+        <svg aria-hidden="true" width={boardWidth} height={boardHeight}>
+          {edges.map((edge) => {
+            const from = placed[edge.source];
+            const to = placed[edge.target];
+            if (!from || !to) return null;
+
+            const x1 = from.x + nodeRadius;
+            const y1 = from.y + nodeRadius;
+            const x2 = to.x + nodeRadius;
+            const y2 = to.y + nodeRadius;
+
+            const dx = Math.abs(x2 - x1) * 0.5;
+            const c1x = x1 < x2 ? x1 + dx : x1 - dx;
+            const c2x = x1 < x2 ? x2 - dx : x2 + dx;
+            const pathData = `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`;
+
+            const isContradiction = edge.type === "CONTRADICTS" || edge.type === "AMBIGUOUS";
+            const isReconciled = edge.type === "RECONCILES_WITH" || edge.type === "CORRECTS";
+            const isHighlighted = selected && (edge.source === selected || edge.target === selected);
+
+            const color = isContradiction
+              ? "#FA6610"
+              : isReconciled
+              ? "#10B981"
+              : "#A1A1AA";
+
+            return (
+              <path
+                key={edge.id}
+                d={pathData}
+                fill="none"
+                stroke={color}
+                strokeWidth={isHighlighted ? "2.2" : "1.5"}
+                strokeDasharray={edge.inferred || isContradiction ? "3 3" : undefined}
+                opacity={selected ? (isHighlighted ? 1 : 0.25) : 0.85}
+              />
+            );
+          })}
+        </svg>
+
+        {/* Cluster / Case Labels */}
+        {arranged.labels.map((label) => (
+          <div key={label.id} className="cluster-label" style={{ left: label.x, top: label.y }}>
+            {label.id}
+          </div>
+        ))}
+
+        {/* Circular Ring Nodes with document type inside the ring */}
+        {nodes.map((node) => {
+          const pt = placed[node.id] || { x: 40, y: 40 };
+          const isSelected = selected === node.id;
+          const isDimmed = Boolean(focused && node.group && node.group !== focused && node.group !== "policy");
+
+          const badge = getNodeBadge(node);
+          const typeClass = getNodeTypeClass(node);
+
           return (
-            <line
-              key={edge.id}
-              x1={from.x + ox}
-              y1={from.y + oy}
-              x2={to.x + ox}
-              y2={to.y + oy}
-              stroke={edgeColor(edge.type)}
-              strokeDasharray={edge.inferred || edge.type === "POTENTIALLY_SUPPORTS" || edge.type === "MENTIONS" ? "4 4" : undefined}
-              strokeWidth="1.4"
-            />
+            <div
+              key={node.id}
+              className={`ring-node-wrapper${isSelected ? " selected" : ""}${isDimmed ? " dim" : ""}`}
+              style={{ left: pt.x, top: pt.y }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect(node.id);
+              }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                const startX = event.clientX;
+                const startY = event.clientY;
+                const originX = pt.x;
+                const originY = pt.y;
+
+                const onPointerMove = (next: PointerEvent) => {
+                  const newX = Math.max(8, originX + next.clientX - startX);
+                  const newY = Math.max(8, originY + next.clientY - startY);
+                  setDraggedPositions((prev) => ({
+                    ...prev,
+                    [node.id]: { x: newX, y: newY },
+                  }));
+                };
+
+                const onPointerUp = () => {
+                  window.removeEventListener("pointermove", onPointerMove);
+                  window.removeEventListener("pointerup", onPointerUp);
+                };
+
+                window.addEventListener("pointermove", onPointerMove);
+                window.addEventListener("pointerup", onPointerUp);
+              }}
+            >
+              <div className={`ring-node ${typeClass}`}>
+                <span className="ring-node-badge">{badge}</span>
+              </div>
+              <div className="ring-node-label">
+                <span className="ring-node-title">
+                  {node.redacted ? "Withheld" : node.label}
+                </span>
+                <span className="ring-node-meta">
+                  {node.redacted
+                    ? node.available_from?.slice(5, 10) || "Future"
+                    : node.amount
+                    ? `$${node.amount}`
+                    : ""}
+                </span>
+              </div>
+            </div>
           );
         })}
-      </svg>
-      {arranged.labels.map((label) => (
-        <div key={label.id} className="cluster-label" data-cluster={label.id} style={{ left: label.x, top: label.y }}>
-          {label.id}
-        </div>
-      ))}
-      {nodes.map((node) => {
-        const point = placed[node.id] || { x: 40, y: 40 };
-        const dim = Boolean(focused && node.group && node.group !== focused && node.group !== "policy");
-        return (
-          <button
-            key={node.id}
-            className={`node${node.redacted ? " redacted" : ""}${selected === node.id ? " selected" : ""}${dim ? " dim" : ""}`}
-            style={{ left: point.x, top: point.y }}
-            onClick={() => onSelect(node.id)}
-            onPointerDown={(event) => {
-              const startX = event.clientX;
-              const startY = event.clientY;
-              const origin = point;
-              const move = (next: PointerEvent) => {
-                setPositions((current) => ({
-                  ...arranged.points,
-                  ...current,
-                  [node.id]: { x: origin.x + next.clientX - startX, y: origin.y + next.clientY - startY },
-                }));
-              };
-              const up = () => {
-                window.removeEventListener("pointermove", move);
-                window.removeEventListener("pointerup", up);
-              };
-              window.addEventListener("pointermove", move);
-              window.addEventListener("pointerup", up);
-            }}
-          >
-            <small>{node.redacted ? "Unavailable" : node.type}</small>
-            <strong>{node.redacted ? "Blocked evidence" : node.amount ? `$${node.amount}` : node.label}</strong>
-            <small>{node.redacted ? node.available_from?.slice(0, 10) : node.label}</small>
-          </button>
-        );
-      })}
       </div>
     </div>
   );
 }
 
-function edgeColor(type: string) {
-  if (type === "CONTRADICTS") return "#e07a72";
-  if (type === "RECONCILES_WITH" || type === "CORRECTS") return "#8dcea0";
-  if (type === "POTENTIALLY_SUPPORTS" || type === "DERIVED_FROM" || type === "MENTIONS" || type === "SOURCE_CANDIDATE") return "#7fd3ff";
-  if (type === "GOVERNS" || type === "GOVERNED_BY" || type === "SUPERSEDES" || type === "AMBIGUOUS") return "#e6b35a";
-  return "#5d7388";
+function getNodeBadge(node: GraphNode): string {
+  if (node.redacted) return "INV";
+  const label = node.label.toUpperCase();
+  if (label.includes("D3") || label === "JE-911" || label.startsWith("ACR")) return "D3";
+  if (label.includes("B3")) return "B3";
+  if (label.includes("C3")) return "C3";
+  if (node.type === "PURCHASE_ORDER" || label.startsWith("PO")) return "PO";
+  if (node.type === "EMAIL" || label.startsWith("EM") || label.startsWith("MSG")) return "EM";
+  if (node.type === "INVOICE" || label.startsWith("INV")) return "INV";
+  if (node.type === "CONTRACT" || label.startsWith("CTR")) return "CTR";
+  if (node.type === "DECISION" || label.startsWith("JE")) return "JE";
+  if (node.type === "POLICY" || label.startsWith("POL")) return "POL";
+  return label.slice(0, 3);
+}
+
+function getNodeTypeClass(node: GraphNode): string {
+  if (node.redacted) return "type-redacted";
+  const badge = getNodeBadge(node);
+  if (badge === "D3" || node.type === "DECISION") return "type-target";
+  if (badge === "B3" || badge === "C3") return "type-precedent";
+  if (badge === "PO") return "type-po";
+  if (badge === "EM") return "type-email";
+  if (badge === "INV") return "type-invoice";
+  if (badge === "CTR") return "type-contract";
+  if (badge === "JE") return "type-journal";
+  return "type-po";
 }
 
 type Board = { points: Record<string, Point>; labels: Label[]; w: number; h: number };
 
-function layout(nodes: GraphNode[], size: { w: number; h: number }): Board {
-  if (nodes.length > 30) return companyBoard(nodes);
-  const grouped = nodes.some((node) => node.group);
-  if (!grouped) return { points: circle(nodes, size, size.w / 2, size.h / 2, Math.max(90, Math.min(size.w, size.h) * 0.32)), labels: [], w: size.w, h: size.h };
-  const groups = [...new Set(nodes.map((node) => node.group || "other"))];
-  const cases = groups.filter((group) => group !== "policy");
-  if (cases.length === 1) {
-    const radius = Math.max(150, Math.min(size.w, size.h) * 0.34);
-    return {
-      points: circle(nodes, size, size.w / 2, size.h / 2, radius),
-      labels: [{ id: cases[0], x: size.w / 2 - 16, y: 18 }],
-      w: size.w,
-      h: size.h,
-    };
-  }
-  const centers: Record<string, Point> = {};
-  const cx = size.w / 2;
-  const cy = size.h / 2;
-  centers.policy = { x: cx, y: cy };
-  const ring = Math.max(180, Math.min(size.w, size.h) * 0.34);
-  cases.forEach((group, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(cases.length, 1) - Math.PI / 2;
-    centers[group] = { x: cx + Math.cos(angle) * ring, y: cy + Math.sin(angle) * ring * 0.78 };
-  });
+function layoutNodes(nodes: GraphNode[], size: { w: number; h: number }, focused?: string | null): Board {
   const points: Record<string, Point> = {};
   const labels: Label[] = [];
-  for (const group of groups) {
-    const members = nodes.filter((node) => (node.group || "other") === group);
-    const center = centers[group] || { x: cx, y: cy };
-    const radius = members.length <= 1 ? 0 : Math.max(48, 16 * members.length);
-    members.forEach((node, index) => {
-      const angle = (Math.PI * 2 * index) / Math.max(members.length, 1) - Math.PI / 2;
+
+  const isSingleCase = focused || nodes.length <= 16;
+  if (isSingleCase) {
+    const cx = size.w / 2;
+    const cy = size.h / 2;
+
+    const targetNode =
+      nodes.find(
+        (n) => getNodeBadge(n) === "D3" || n.type === "DECISION" || n.label.startsWith("JE") || n.label.startsWith("ACR")
+      ) || nodes[0];
+
+    const precedentNodes = nodes.filter(
+      (n) => n.id !== targetNode?.id && (getNodeBadge(n) === "B3" || getNodeBadge(n) === "C3")
+    );
+
+    const otherNodes = nodes.filter(
+      (n) => n.id !== targetNode?.id && !precedentNodes.some((p) => p.id === n.id)
+    );
+
+    if (targetNode) {
+      points[targetNode.id] = { x: cx - 24, y: cy - 24 };
+    }
+
+    if (precedentNodes.length > 0) {
+      precedentNodes.forEach((node, idx) => {
+        const offset = (idx - (precedentNodes.length - 1) / 2) * 90;
+        points[node.id] = { x: cx - 180, y: cy - 24 + offset };
+      });
+    }
+
+    if (otherNodes.length > 0) {
+      const rightX = cx + 180;
+      otherNodes.forEach((node, idx) => {
+        const spacing = otherNodes.length === 1 ? 0 : 80;
+        const offset = (idx - (otherNodes.length - 1) / 2) * spacing;
+        points[node.id] = { x: rightX, y: cy - 24 + offset };
+      });
+    }
+
+    return { points, labels: [], w: size.w, h: size.h };
+  }
+
+  const caseGroups = [...new Set(nodes.map((n) => n.group || "other"))].sort();
+  const cellW = 280;
+  const cellH = 180;
+  const cols = Math.max(2, Math.floor((size.w - 40) / cellW));
+
+  caseGroups.forEach((group, gIdx) => {
+    const members = nodes.filter((n) => (n.group || "other") === group);
+    const col = gIdx % cols;
+    const row = Math.floor(gIdx / cols);
+    const gx = 32 + col * cellW;
+    const gy = 32 + row * cellH;
+
+    labels.push({ id: group === "other" ? "General" : group, x: gx, y: gy });
+
+    members.forEach((node, mIdx) => {
+      const mCol = mIdx % 3;
+      const mRow = Math.floor(mIdx / 3);
       points[node.id] = {
-        x: center.x - 70 + Math.cos(angle) * radius,
-        y: center.y - 28 + Math.sin(angle) * radius * 0.86,
+        x: gx + mCol * 78,
+        y: gy + 26 + mRow * 74,
       };
     });
-    if (group !== "policy") labels.push({ id: group, x: center.x - 18, y: center.y - radius - 46 });
-  }
-  return { points, labels, w: size.w, h: size.h };
-}
-
-const KIND_LABEL: Record<string, string> = {
-  invoice: "Invoices",
-  purchase_order: "Purchase orders",
-  email: "Emails",
-  contract: "Contracts",
-  memo: "Confirmations",
-  journal: "Entries",
-  other: "Other documents",
-};
-
-function companyBoard(nodes: GraphNode[]): Board {
-  const points: Record<string, Point> = {};
-  const labels: Label[] = [];
-  const caseGroups = [...new Set(nodes.map((node) => node.group || "").filter((group) => /^C\d+$/.test(group)))].sort();
-  const policies = nodes.filter((node) => node.group === "policy");
-  const otherGroups = [...new Set(nodes.map((node) => node.group || "other").filter((group) => group !== "policy" && !/^C\d+$/.test(group)))].sort();
-  const colW = 98;
-  const rowH = 50;
-  const cellW = 310;
-  const cellH = 190;
-  const cols = 5;
-  let y = 16;
-  if (policies.length) {
-    labels.push({ id: "Policies", x: 16, y });
-    y += 22;
-    placeGrid(policies, 16, y, colW, rowH, 8, points);
-    y += Math.ceil(policies.length / 8) * rowH + 24;
-  }
-  caseGroups.forEach((group, index) => {
-    const col = index % cols;
-    const row = Math.floor(index / cols);
-    const x = 16 + col * cellW;
-    const top = y + row * cellH;
-    labels.push({ id: group, x, y: top });
-    placeGrid(nodes.filter((node) => node.group === group), x, top + 22, colW, rowH, 3, points);
   });
-  if (caseGroups.length) y += Math.ceil(caseGroups.length / cols) * cellH + 12;
-  for (const group of otherGroups) {
-    const members = nodes.filter((node) => (node.group || "other") === group);
-    const gridCols = 12;
-    labels.push({ id: KIND_LABEL[group] || group, x: 16, y });
-    y += 22;
-    placeGrid(members, 16, y, colW, rowH, gridCols, points);
-    y += Math.ceil(members.length / gridCols) * rowH + 18;
-  }
-  return { points, labels, w: Math.max(cols * cellW, 12 * colW) + 32, h: y + 16 };
-}
 
-function placeGrid(nodes: GraphNode[], x: number, y: number, colW: number, rowH: number, cols: number, points: Record<string, Point>) {
-  nodes.forEach((node, index) => {
-    points[node.id] = { x: x + (index % cols) * colW, y: y + Math.floor(index / cols) * rowH };
-  });
-}
+  const totalRows = Math.ceil(caseGroups.length / cols);
+  const totalHeight = Math.max(size.h, totalRows * cellH + 60);
+  const totalWidth = Math.max(size.w, cols * cellW + 40);
 
-function circle(nodes: GraphNode[], size: { w: number; h: number }, cx: number, cy: number, radius: number): Record<string, Point> {
-  const points: Record<string, Point> = {};
-  nodes.forEach((node, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1) - Math.PI / 2;
-    points[node.id] = { x: cx - 70 + Math.cos(angle) * radius, y: cy - 28 + Math.sin(angle) * radius * 0.72 };
-  });
-  return points;
+  return { points, labels, w: totalWidth, h: totalHeight };
 }

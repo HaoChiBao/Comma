@@ -68,8 +68,19 @@ export default function CasePage() {
   }, [current, snapshotId]);
 
   return (
-    <main>
-      <div className="row" style={{ justifyContent: "space-between" }}>
+    <div className="shell">
+      <header className="top">
+        <div className="brand-row">
+          <a href="/" className="brand-title">Comma</a>
+          <span className="brand-tagline">Case Investigation · {caseId}</span>
+        </div>
+        <nav className="nav-links">
+          <a href="/" className="nav-link">← Fullscreen Graph</a>
+          <a href="/ingest" className="nav-link">Ingest</a>
+        </nav>
+      </header>
+      <main>
+        <div className="row" style={{ justifyContent: "space-between" }}>
         <div>
           <div className="eyebrow">{caseId}</div>
           <h2>{item?.vendor_name || "Case"}</h2>
@@ -125,5 +136,6 @@ export default function CasePage() {
         </aside>
       </div>
     </main>
+  </div>
   );
 }

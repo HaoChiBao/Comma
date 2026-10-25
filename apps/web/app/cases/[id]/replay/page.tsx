@@ -69,9 +69,19 @@ export default function ReplayPage() {
   }
 
   return (
-    <main>
-      <a href={`/cases/${params.id}`}>Back to the graph</a>
-      <h2>Agent replay</h2>
+    <div className="shell">
+      <header className="top">
+        <div className="brand-row">
+          <a href="/" className="brand-title">Comma</a>
+          <span className="brand-tagline">Agent Replay · {params.id}</span>
+        </div>
+        <nav className="nav-links">
+          <a href={`/cases/${params.id}`} className="nav-link">← Case View</a>
+          <a href="/" className="nav-link">Fullscreen Graph</a>
+        </nav>
+      </header>
+      <main>
+        <h2>Agent replay</h2>
       <div className="row">
         <label>
           Investigator{" "}
@@ -117,5 +127,6 @@ export default function ReplayPage() {
         </div>
       ) : <p className="muted">The offline investigator uses the snapshot. It has no web access and no model key.</p>}
     </main>
+  </div>
   );
 }

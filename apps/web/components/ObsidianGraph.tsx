@@ -1,23 +1,50 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { GraphEdge, GraphNode } from "@/lib/api";
 
-type Body = {
+type Node3D = {
   id: string;
   x: number;
   y: number;
+  z: number;
   vx: number;
   vy: number;
-  gx: number;
-  gy: number;
+  vz: number;
   r: number;
+  degree: number;
   label: string;
   group: string;
   color: string;
+  type: string;
+  amount: string | null;
+  redacted: boolean;
+  // Projected screen coordinates
+  projX: number;
+  projY: number;
+  projZ: number;
+  projScale: number;
 };
 
-const PALETTE = ["#7aa2f7", "#f7768e", "#e0af68", "#9ece6a", "#bb9af7", "#7dcfff", "#ff9e64", "#73daca", "#c0caf5", "#f6c177", "#2ac3de", "#b4f9f8"];
+type EdgeIndex = {
+  sourceIndex: number;
+  targetIndex: number;
+  sourceId: string;
+  targetId: string;
+  type: string;
+  inferred: boolean;
+};
+
+const PALETTE = [
+  "#FA6610", // Comma orange
+  "#10B981", // Emerald green
+  "#2563EB", // Tech blue
+  "#8B5CF6", // Purple
+  "#D97706", // Amber
+  "#06B6D4", // Cyan
+  "#EC4899", // Pink
+  "#4F46E5", // Indigo
+];
 
 export function ObsidianGraph({
   nodes,
@@ -34,322 +61,624 @@ export function ObsidianGraph({
 }) {
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const bodies = useRef<Body[]>([]);
-  const neighbors = useRef<Map<string, Set<string>>>(new Map());
-  const view = useRef({ x: 0, y: 0, k: 1 });
-  const drag = useRef<{ id: string; dx: number; dy: number } | { pan: true; x: number; y: number; vx: number; vy: number } | null>(null);
-  const [hover, setHover] = useState<string | null>(null);
-  const [groups, setGroups] = useState<{ id: string; color: string; count: number }[]>([]);
-  const signature = useMemo(() => nodes.map((node) => node.id).join("|"), [nodes]);
 
+  const bodies = useRef<Node3D[]>([]);
+  const edgeList = useRef<EdgeIndex[]>([]);
+  const neighbors = useRef<Map<string, Set<string>>>(new Map());
+
+  // 3D Camera & Turntable Rotation
+  const camera = useRef({
+    x: 0,
+    y: 0,
+    k: 1.0,
+    rotY: 0, // 360 yaw rotation
+    rotX: 0.22, // Slight tilt for 3D perspective
+    autoRotate: true,
+  });
+
+  const simAlpha = useRef<number>(1.0);
+  const isDraggingNode = useRef<string | null>(null);
+  const isRotating = useRef<{ startX: number; startY: number; startRotY: number; startRotX: number; startPanX: number; startPanY: number; isPan: boolean } | null>(null);
+
+  const [hover, setHover] = useState<string | null>(null);
+
+  const signature = useMemo(() => `${nodes.length}:${edges.length}:${nodes.map((n) => n.id).join("|")}`, [nodes, edges]);
+
+  // 1. Initialize 3D Atom Sphere
   useEffect(() => {
-    const degree = new Map<string, number>();
+    const degreeMap = new Map<string, number>();
     const linked = new Map<string, Set<string>>();
+
     for (const edge of edges) {
-      degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
-      degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+      degreeMap.set(edge.source, (degreeMap.get(edge.source) || 0) + 1);
+      degreeMap.set(edge.target, (degreeMap.get(edge.target) || 0) + 1);
       if (!linked.has(edge.source)) linked.set(edge.source, new Set());
       if (!linked.has(edge.target)) linked.set(edge.target, new Set());
-      linked.get(edge.source)?.add(edge.target);
-      linked.get(edge.target)?.add(edge.source);
+      linked.get(edge.source)!.add(edge.target);
+      linked.get(edge.target)!.add(edge.source);
     }
     neighbors.current = linked;
-    const grouped = new Map<string, GraphNode[]>();
-    for (const node of nodes) {
-      const group = node.group || "Other";
-      const list = grouped.get(group) || [];
-      list.push(node);
-      grouped.set(group, list);
-    }
-    const names = [...grouped.keys()].sort();
-    const placed: Body[] = [];
-    names.forEach((group, index) => {
-      const angle = (Math.PI * 2 * index) / Math.max(names.length, 1) - Math.PI / 2;
-      const reach = 280 + names.length * 18;
-      const gx = Math.cos(angle) * reach;
-      const gy = Math.sin(angle) * reach;
-      const members = grouped.get(group) || [];
-      members.forEach((node, member) => {
-        const turn = (Math.PI * 2 * member) / Math.max(members.length, 1);
-        const radius = 28 + Math.sqrt(members.length) * 16;
-        placed.push({
-          id: node.id,
-          x: gx + Math.cos(turn) * radius,
-          y: gy + Math.sin(turn) * radius,
-          vx: 0,
-          vy: 0,
-          gx,
-          gy,
-          r: 3.2 + Math.sqrt(degree.get(node.id) || 0) * 1.35,
-          label: node.label,
-          group,
-          color: groupColor(group),
-        });
-      });
-    });
-    bodies.current = placed;
-    setGroups(names.map((id) => ({ id, color: groupColor(id), count: grouped.get(id)?.length || 0 })));
-    const element = frame.current;
-    if (element) {
-      view.current = { x: element.clientWidth / 2, y: element.clientHeight / 2, k: element.clientWidth < 900 ? 0.55 : 0.72 };
-    }
-  }, [signature, edges, nodes]);
 
+    const nodeIndexMap = new Map<string, number>();
+    const placed: Node3D[] = [];
+
+    // Distribute nodes across the full screen in a 3D sphere using spherical Fibonacci lattice
+    const count = nodes.length;
+    const phi = (1 + Math.sqrt(5)) / 2; // Golden ratio
+
+    const el = frame.current;
+    const vpW = el?.clientWidth || (typeof window !== "undefined" ? window.innerWidth : 1200);
+    const vpH = el?.clientHeight || (typeof window !== "undefined" ? window.innerHeight : 800);
+    const sphereR = Math.max(340, Math.min(vpW, vpH) * 0.38) + Math.sqrt(count) * 16;
+
+    nodes.forEach((node, i) => {
+      const g = node.group || "General";
+      const deg = degreeMap.get(node.id) || 0;
+
+      // Clean minimalistic node sizes (like Obsidian)
+      // Hubs / Key transactions / Decisions: ~8-12px radius
+      // Regular documents: ~5-7px radius
+      // Small leaves: ~3.5-5px radius
+      const isHub = deg >= 5 || node.type === "DECISION" || node.label.startsWith("JE") || node.group === "Vendors";
+      const baseRadius = isHub ? 7.5 + Math.min(4.5, deg * 0.6) : 4.0 + Math.min(2.5, deg * 0.4);
+
+      // Spherical distribution spread out across screen
+      const yNorm = 1 - (i / Math.max(count - 1, 1)) * 2; // -1 to 1
+      const radiusAtY = Math.sqrt(Math.max(0, 1 - yNorm * yNorm));
+      const theta = 2 * Math.PI * i / phi;
+
+      const x = Math.cos(theta) * radiusAtY * sphereR;
+      const y = yNorm * sphereR * 0.82;
+      const z = Math.sin(theta) * radiusAtY * sphereR;
+
+      placed.push({
+        id: node.id,
+        x: x + (Math.random() - 0.5) * 24,
+        y: y + (Math.random() - 0.5) * 24,
+        z: z + (Math.random() - 0.5) * 24,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        r: baseRadius,
+        degree: deg,
+        label: node.label,
+        group: g,
+        color: getNodeColor(node),
+        type: node.type,
+        amount: node.amount,
+        redacted: Boolean(node.redacted),
+        projX: 0,
+        projY: 0,
+        projZ: 0,
+        projScale: 1,
+      });
+      nodeIndexMap.set(node.id, placed.length - 1);
+    });
+
+    bodies.current = placed;
+
+    const edgesIndexed: EdgeIndex[] = [];
+    for (const edge of edges) {
+      const sIdx = nodeIndexMap.get(edge.source);
+      const tIdx = nodeIndexMap.get(edge.target);
+      if (sIdx !== undefined && tIdx !== undefined) {
+        edgesIndexed.push({
+          sourceIndex: sIdx,
+          targetIndex: tIdx,
+          sourceId: edge.source,
+          targetId: edge.target,
+          type: edge.type,
+          inferred: Boolean(edge.inferred),
+        });
+      }
+    }
+    edgeList.current = edgesIndexed;
+
+    if (el) {
+      camera.current.x = el.clientWidth / 2;
+      camera.current.y = el.clientHeight / 2;
+      camera.current.k = el.clientWidth < 900 ? 0.75 : 0.95;
+    }
+
+    simAlpha.current = 1.0;
+  }, [signature, nodes, edges]);
+
+  // 2. Continuous 3D Physics & Slow 360° Rotation Animation Loop
   useEffect(() => {
     const element = frame.current;
     const surface = canvas.current;
     if (!element || !surface) return;
+
     let frameId = 0;
-    let settle = 0;
-    const draw = () => {
+
+    const tick = () => {
       const width = element.clientWidth;
       const height = element.clientHeight;
       const ratio = window.devicePixelRatio || 1;
+
       if (surface.width !== Math.floor(width * ratio) || surface.height !== Math.floor(height * ratio)) {
         surface.width = Math.floor(width * ratio);
         surface.height = Math.floor(height * ratio);
       }
-      const context = surface.getContext("2d");
-      if (!context) return;
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      if (settle < 160 && !drag.current) {
-        step(bodies.current, neighbors.current);
-        settle += 1;
+
+      const ctx = surface.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+      // Slow continuous 360-degree rotation (paused only when actively dragging/rotating)
+      if (camera.current.autoRotate && !isRotating.current && !isDraggingNode.current) {
+        camera.current.rotY += 0.0016; // ~1 full rotation every 65 seconds
       }
-      paint(context, width, height, bodies.current, neighbors.current, view.current, hover, selected, focused || null);
-      frameId = window.requestAnimationFrame(draw);
+
+      // Step 3D force simulation
+      if (simAlpha.current > 0.002) {
+        step3DPhysics(bodies.current, edgeList.current, simAlpha.current, isDraggingNode.current);
+        simAlpha.current *= 0.993;
+      }
+
+      // Project 3D nodes to 2D screen coordinates
+      project3DTo2D(bodies.current, camera.current);
+
+      // Paint 3D atom graph with depth ordering
+      paint3DAtomGraph(
+        ctx,
+        width,
+        height,
+        bodies.current,
+        neighbors.current,
+        edgeList.current,
+        camera.current,
+        hover,
+        selected
+      );
+
+      frameId = window.requestAnimationFrame(tick);
     };
-    frameId = window.requestAnimationFrame(draw);
+
+    frameId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frameId);
-  }, [signature, hover, selected, focused]);
+  }, [signature, hover, selected]);
 
-  function worldPoint(event: { clientX: number; clientY: number }) {
+  // 3. Trackpad Pinch-to-Zoom (Non-passive so page NEVER zooms)
+  useEffect(() => {
+    const el = canvas.current;
+    if (!el) return;
+
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const rect = el.getBoundingClientRect();
+      const cam = camera.current;
+
+      const zoomIntensity = event.ctrlKey ? 0.012 : 0.0018;
+      const delta = -event.deltaY * zoomIntensity;
+      const factor = Math.exp(delta);
+      const nextK = Math.min(3.5, Math.max(0.25, cam.k * factor));
+
+      const px = event.clientX - rect.left;
+      const py = event.clientY - rect.top;
+      cam.x = px - ((px - cam.x) * nextK) / cam.k;
+      cam.y = py - ((py - cam.y) * nextK) / cam.k;
+      cam.k = nextK;
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Hit test on projected 2D screen coordinates
+  const findNodeAtScreen = useCallback((clientX: number, clientY: number) => {
     const rect = canvas.current?.getBoundingClientRect();
-    const camera = view.current;
-    if (!rect) return { x: 0, y: 0 };
-    return { x: (event.clientX - rect.left - camera.x) / camera.k, y: (event.clientY - rect.top - camera.y) / camera.k };
-  }
+    if (!rect) return null;
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
 
-  function hit(event: { clientX: number; clientY: number }) {
-    const point = worldPoint(event);
-    let found: Body | null = null;
-    let best = 14;
-    for (const body of bodies.current) {
-      const distance = Math.hypot(body.x - point.x, body.y - point.y);
-      if (distance < body.r + 6 && distance < best) {
-        best = distance;
-        found = body;
+    // Check front-to-back (highest projScale first)
+    const sorted = [...bodies.current].sort((a, b) => b.projScale - a.projScale);
+    for (const body of sorted) {
+      const hitRadius = Math.max(body.r * body.projScale + 8, 18);
+      const d = Math.hypot(body.projX - sx, body.projY - sy);
+      if (d < hitRadius) {
+        return body;
       }
     }
-    return found;
-  }
+    return null;
+  }, []);
+
+  const handleZoom = (factor: number) => {
+    const el = frame.current;
+    if (!el) return;
+    const cx = el.clientWidth / 2;
+    const cy = el.clientHeight / 2;
+    const nextK = Math.min(3.5, Math.max(0.25, camera.current.k * factor));
+    camera.current.x = cx - ((cx - camera.current.x) * nextK) / camera.current.k;
+    camera.current.y = cy - ((cy - camera.current.y) * nextK) / camera.current.k;
+    camera.current.k = nextK;
+  };
+
+  const handleResetView = () => {
+    const el = frame.current;
+    if (!el) return;
+    camera.current.x = el.clientWidth / 2;
+    camera.current.y = el.clientHeight / 2;
+    camera.current.k = el.clientWidth < 900 ? 0.75 : 0.95;
+    camera.current.rotX = 0.22;
+    simAlpha.current = Math.max(simAlpha.current, 0.45);
+  };
 
   return (
-    <div className="graph obsidian" ref={frame} role="group" aria-label="Knowledge graph">
+    <div className="graph obsidian" ref={frame} role="group" aria-label="3D Atom knowledge graph">
       <canvas
         ref={canvas}
-        aria-label="Interconnected company graph"
-        onWheel={(event) => {
-          event.preventDefault();
-          const rect = canvas.current?.getBoundingClientRect();
-          if (!rect) return;
-          const camera = view.current;
-          const next = Math.min(2.8, Math.max(0.18, camera.k * (event.deltaY > 0 ? 0.92 : 1.08)));
-          const px = event.clientX - rect.left;
-          const py = event.clientY - rect.top;
-          view.current = { k: next, x: px - ((px - camera.x) * next) / camera.k, y: py - ((py - camera.y) * next) / camera.k };
-        }}
-        onPointerMove={(event) => {
-          const current = drag.current;
-          if (current && "pan" in current) {
-            view.current.x += event.clientX - current.x;
-            view.current.y += event.clientY - current.y;
-            drag.current = { pan: true, x: event.clientX, y: event.clientY, vx: view.current.x, vy: view.current.y };
-            return;
-          }
-          if (current && "id" in current) {
-            const point = worldPoint(event);
-            const body = bodies.current.find((item) => item.id === current.id);
-            if (body) {
-              body.x = point.x + current.dx;
-              body.y = point.y + current.dy;
-              body.vx = 0;
-              body.vy = 0;
-            }
-            return;
-          }
-          setHover(hit(event)?.id || null);
-        }}
+        aria-label="3D rotating atom graph"
         onPointerDown={(event) => {
-          const body = hit(event);
-          const point = worldPoint(event);
-          if (body) {
-            drag.current = { id: body.id, dx: body.x - point.x, dy: body.y - point.y };
-            onSelect(body.id);
+          const hitNode = findNodeAtScreen(event.clientX, event.clientY);
+          if (hitNode) {
+            isDraggingNode.current = hitNode.id;
+            simAlpha.current = Math.max(simAlpha.current, 0.45);
+            onSelect(hitNode.id);
           } else {
-            drag.current = { pan: true, x: event.clientX, y: event.clientY, vx: view.current.x, vy: view.current.y };
+            // Right-click or Shift-drag to pan; Left-drag to rotate turntable in 3D
+            const isPan = event.button === 2 || event.shiftKey;
+            isRotating.current = {
+              startX: event.clientX,
+              startY: event.clientY,
+              startRotY: camera.current.rotY,
+              startRotX: camera.current.rotX,
+              startPanX: camera.current.x,
+              startPanY: camera.current.y,
+              isPan,
+            };
           }
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
-        onPointerUp={() => {
-          drag.current = null;
+        onPointerMove={(event) => {
+          if (isDraggingNode.current) {
+            const rect = canvas.current?.getBoundingClientRect();
+            if (!rect) return;
+            const sx = event.clientX - rect.left;
+            const sy = event.clientY - rect.top;
+            const cam = camera.current;
+
+            // Unproject screen 2D position back into 3D world plane
+            const target = bodies.current.find((b) => b.id === isDraggingNode.current);
+            if (target) {
+              const cosY = Math.cos(-cam.rotY);
+              const sinY = Math.sin(-cam.rotY);
+              const dx = (sx - cam.x) / cam.k;
+              const dy = (sy - cam.y) / cam.k;
+
+              target.x = dx * cosY;
+              target.z = dx * sinY;
+              target.y = dy;
+              target.vx = 0;
+              target.vy = 0;
+              target.vz = 0;
+              simAlpha.current = Math.max(simAlpha.current, 0.25);
+            }
+            return;
+          }
+
+          if (isRotating.current) {
+            const dx = event.clientX - isRotating.current.startX;
+            const dy = event.clientY - isRotating.current.startY;
+
+            if (isRotating.current.isPan) {
+              camera.current.x = isRotating.current.startPanX + dx;
+              camera.current.y = isRotating.current.startPanY + dy;
+            } else {
+              // 3D turntable rotation
+              camera.current.rotY = isRotating.current.startRotY + dx * 0.006;
+              camera.current.rotX = Math.max(-1.2, Math.min(1.2, isRotating.current.startRotX + dy * 0.005));
+            }
+            return;
+          }
+
+          const hitNode = findNodeAtScreen(event.clientX, event.clientY);
+          setHover(hitNode ? hitNode.id : null);
         }}
+        onPointerUp={(event) => {
+          if (isDraggingNode.current) {
+            simAlpha.current = Math.max(simAlpha.current, 0.2);
+            isDraggingNode.current = null;
+          }
+          isRotating.current = null;
+        }}
+        onContextMenu={(e) => e.preventDefault()}
+        onDoubleClick={handleResetView}
       />
-      <div className="graph-key">
-        {groups.map((group) => (
-          <span key={group.id}><i style={{ background: group.color }} />{group.id} <small>{group.count}</small></span>
-        ))}
+
+      {/* Floating Canvas Controls */}
+      <div className="canvas-zoom-controls">
+        <button onClick={() => handleZoom(1.2)} title="Zoom in">+</button>
+        <button onClick={() => handleZoom(0.8)} title="Zoom out">−</button>
+        <button onClick={handleResetView} title="Reset 3D view">⛶</button>
       </div>
     </div>
   );
 }
 
-function step(items: Body[], linked: Map<string, Set<string>>) {
-  const index = new Map(items.map((body, position) => [body.id, position]));
-  const cell = 96;
-  const buckets = new Map<string, number[]>();
-  items.forEach((body, position) => {
-    const key = `${Math.round(body.x / cell)}:${Math.round(body.y / cell)}`;
-    const list = buckets.get(key) || [];
-    list.push(position);
-    buckets.set(key, list);
-  });
-  for (const [key, members] of buckets) {
-    const [cx, cy] = key.split(":").map(Number);
-    const nearby: number[] = [];
-    for (let ox = -1; ox <= 1; ox += 1) {
-      for (let oy = -1; oy <= 1; oy += 1) {
-        const list = buckets.get(`${cx + ox}:${cy + oy}`);
-        if (list) nearby.push(...list);
+// -------------------------------------------------------------
+// 3D FORCE SIMULATION (Coulomb Repulsion + Spring Links in 3D)
+// -------------------------------------------------------------
+function step3DPhysics(
+  nodes: Node3D[],
+  edges: EdgeIndex[],
+  alpha: number,
+  draggedId: string | null
+) {
+  const n = nodes.length;
+  if (n === 0) return;
+
+  // 1. 3D Coulomb Repulsion (keeps nodes pleasantly separated)
+  for (let i = 0; i < n; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = nodes[j];
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dz = b.z - a.z;
+      let distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq < 1) distSq = 1;
+      const dist = Math.sqrt(distSq);
+
+      if (dist > 650) continue;
+
+      // Generous spacing force so nodes spread across the full screen
+      const force = (1400 / (distSq + 200)) * alpha;
+
+      const minD = a.r + b.r + 42; // Generous collision radius
+      const overlap = minD - dist;
+      const push = overlap > 0 ? overlap * 0.14 * alpha : 0;
+
+      const fx = (dx / dist) * (force + push);
+      const fy = (dy / dist) * (force + push);
+      const fz = (dz / dist) * (force + push);
+
+      if (a.id !== draggedId) {
+        a.vx -= fx;
+        a.vy -= fy;
+        a.vz -= fz;
       }
-    }
-    for (const left of members) {
-      for (const right of nearby) {
-        if (right <= left) continue;
-        const a = items[left];
-        const b = items[right];
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
-        const distance = Math.hypot(dx, dy) || 0.01;
-        if (distance > 140) continue;
-        const force = 80 / (distance * distance);
-        dx = (dx / distance) * force;
-        dy = (dy / distance) * force;
-        a.vx += dx;
-        a.vy += dy;
-        b.vx -= dx;
-        b.vy -= dy;
+      if (b.id !== draggedId) {
+        b.vx += fx;
+        b.vy += fy;
+        b.vz += fz;
       }
     }
   }
-  for (const [source, targets] of linked) {
-    const from = index.get(source);
-    if (from === undefined) continue;
-    for (const target of targets) {
-      const to = index.get(target);
-      if (to === undefined || to <= from) continue;
-      const a = items[from];
-      const b = items[to];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const distance = Math.hypot(dx, dy) || 0.01;
-      const pull = (distance - 54) * 0.012;
-      const ux = (dx / distance) * pull;
-      const uy = (dy / distance) * pull;
-      a.vx += ux;
-      a.vy += uy;
-      b.vx -= ux;
-      b.vy -= uy;
+
+  // 2. 3D Spring Links (Hooke's Law between connected documents)
+  const targetLinkDist = 130;
+  for (let e = 0; e < edges.length; e++) {
+    const edge = edges[e];
+    const a = nodes[edge.sourceIndex];
+    const b = nodes[edge.targetIndex];
+    if (!a || !b) continue;
+
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let dz = b.z - a.z;
+    let dist = Math.hypot(dx, dy, dz) || 0.1;
+    const diff = (dist - targetLinkDist) / dist;
+    const springStrength = 0.026 * alpha;
+
+    const fx = dx * diff * springStrength;
+    const fy = dy * diff * springStrength;
+    const fz = dz * diff * springStrength;
+
+    if (a.id !== draggedId) {
+      a.vx += fx;
+      a.vy += fy;
+      a.vz += fz;
+    }
+    if (b.id !== draggedId) {
+      b.vx -= fx;
+      b.vy -= fy;
+      b.vz -= fz;
     }
   }
-  for (const body of items) {
-    body.vx += (body.gx - body.x) * 0.004;
-    body.vy += (body.gy - body.y) * 0.004;
-    body.vx *= 0.82;
-    body.vy *= 0.82;
-    body.x += Math.max(-8, Math.min(8, body.vx));
-    body.y += Math.max(-8, Math.min(8, body.vy));
+
+  // 3. Atom Nucleus Gravity (gentle centering so nodes breathe across screen)
+  const gravity = 0.00065 * alpha;
+  const damping = 0.88;
+
+  for (let i = 0; i < n; i++) {
+    const a = nodes[i];
+    if (a.id === draggedId) continue;
+
+    a.vx -= a.x * gravity;
+    a.vy -= a.y * gravity;
+    a.vz -= a.z * gravity;
+
+    a.vx *= damping;
+    a.vy *= damping;
+    a.vz *= damping;
+
+    const speed = Math.hypot(a.vx, a.vy, a.vz);
+    const maxSpeed = 16;
+    if (speed > maxSpeed) {
+      a.vx = (a.vx / speed) * maxSpeed;
+      a.vy = (a.vy / speed) * maxSpeed;
+      a.vz = (a.vz / speed) * maxSpeed;
+    }
+
+    a.x += a.vx;
+    a.y += a.vy;
+    a.z += a.vz;
   }
 }
 
-function paint(
-  context: CanvasRenderingContext2D,
+// -------------------------------------------------------------
+// 3D PERSPECTIVE PROJECTION
+// -------------------------------------------------------------
+function project3DTo2D(
+  nodes: Node3D[],
+  cam: { x: number; y: number; k: number; rotY: number; rotX: number }
+) {
+  const cosY = Math.cos(cam.rotY);
+  const sinY = Math.sin(cam.rotY);
+  const cosX = Math.cos(cam.rotX);
+  const sinX = Math.sin(cam.rotX);
+  const focalLength = 950; // Natural wide telephoto perspective without distortion
+
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+
+    // 1. Yaw rotation (Y-axis 360)
+    const x1 = node.x * cosY + node.z * sinY;
+    const z1 = -node.x * sinY + node.z * cosY;
+
+    // 2. Pitch tilt (X-axis)
+    const y2 = node.y * cosX - z1 * sinX;
+    const z2 = node.y * sinX + z1 * cosX;
+
+    // 3. Perspective scale factor based on depth z2
+    const scale = focalLength / (focalLength + z2);
+
+    node.projScale = scale;
+    node.projZ = z2;
+    node.projX = cam.x + x1 * scale * cam.k;
+    node.projY = cam.y + y2 * scale * cam.k;
+  }
+}
+
+// -------------------------------------------------------------
+// 3D CANVAS RENDERING (Depth Shading & Single Tooltip HUD)
+// -------------------------------------------------------------
+function paint3DAtomGraph(
+  ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  items: Body[],
-  linked: Map<string, Set<string>>,
-  camera: { x: number; y: number; k: number },
-  hover: string | null,
-  selected: string | null,
-  focused: string | null,
+  nodes: Node3D[],
+  neighbors: Map<string, Set<string>>,
+  edges: EdgeIndex[],
+  cam: { x: number; y: number; k: number },
+  hoverId: string | null,
+  selectedId: string | null
 ) {
-  context.clearRect(0, 0, width, height);
-  context.save();
-  context.translate(camera.x, camera.y);
-  context.scale(camera.k, camera.k);
-  const focus = new Set<string>();
-  if (focused) {
-    for (const body of items) {
-      if (body.group === focused) focus.add(body.id);
-    }
-    for (const id of [...focus]) {
-      for (const next of linked.get(id) || []) focus.add(next);
+  ctx.clearRect(0, 0, width, height);
+
+  const activeId = hoverId || selectedId;
+  const nearSet = new Set<string>();
+  if (activeId) {
+    nearSet.add(activeId);
+    for (const neighbor of neighbors.get(activeId) || []) {
+      nearSet.add(neighbor);
     }
   }
-  const active = hover || selected;
-  const near = new Set<string>();
-  if (active) {
-    near.add(active);
-    for (const next of linked.get(active) || []) near.add(next);
+
+  // 1. Draw Edges
+  for (let i = 0; i < edges.length; i++) {
+    const edge = edges[i];
+    const a = nodes[edge.sourceIndex];
+    const b = nodes[edge.targetIndex];
+    if (!a || !b) continue;
+
+    const isConnected = nearSet.has(a.id) && nearSet.has(b.id);
+    const avgScale = (a.projScale + b.projScale) * 0.5;
+
+    if (activeId) {
+      // Faded look: only connections within the hovered/selected node group stay illuminated
+      if (isConnected) {
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = edge.type === "CONTRADICTS" ? "#FA6610" : "rgba(13, 13, 12, 0.70)";
+      } else {
+        ctx.lineWidth = 0.8;
+        ctx.strokeStyle = "rgba(13, 13, 12, 0.03)";
+      }
+    } else {
+      const depthAlpha = Math.max(0.06, Math.min(0.35, (avgScale - 0.35) * 0.5));
+      ctx.lineWidth = 1.0;
+      ctx.strokeStyle = edge.type === "CONTRADICTS"
+        ? `rgba(250, 102, 16, ${depthAlpha * 1.6})`
+        : `rgba(13, 13, 12, ${depthAlpha})`;
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(a.projX, a.projY);
+    ctx.lineTo(b.projX, b.projY);
+    ctx.stroke();
   }
-  const byId = new Map(items.map((body) => [body.id, body]));
-  context.lineWidth = 1;
-  for (const [source, targets] of linked) {
-    const from = byId.get(source);
-    if (!from) continue;
-    for (const target of targets) {
-      if (target < source) continue;
-      const to = byId.get(target);
-      if (!to) continue;
-      const lit = !active || near.has(source) || near.has(target);
-      const grouped = !focused || focus.has(source) || focus.has(target);
-      context.strokeStyle = lit && grouped ? "rgba(214, 222, 232, 0.55)" : "rgba(214, 222, 232, 0.06)";
-      context.beginPath();
-      context.moveTo(from.x, from.y);
-      context.lineTo(to.x, to.y);
-      context.stroke();
+
+  // 2. Draw Clean Minimalistic Nodes (Sorted back-to-front by depth projZ)
+  const sortedNodes = [...nodes].sort((a, b) => b.projZ - a.projZ);
+
+  for (let i = 0; i < sortedNodes.length; i++) {
+    const node = sortedNodes[i];
+    const isSelected = node.id === selectedId;
+    const isHovered = node.id === hoverId;
+    const isLit = !activeId || nearSet.has(node.id);
+
+    const renderR = Math.max(2.5, node.r * node.projScale * (isSelected ? 1.4 : isHovered ? 1.3 : 1.0));
+    const depthAlpha = Math.max(0.4, Math.min(1.0, (node.projScale - 0.25) * 1.1));
+
+    // Preserve the faded look for everything but the selected/hovered node group
+    ctx.globalAlpha = isLit ? depthAlpha : 0.08;
+
+    // Clean flat minimal circle like Obsidian
+    ctx.fillStyle = node.color;
+    ctx.beginPath();
+    ctx.arc(node.projX, node.projY, renderR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Clean stroke on selected or hovered node
+    if (isSelected || isHovered) {
+      ctx.strokeStyle = "#0D0D0C";
+      ctx.lineWidth = isSelected ? 2.0 : 1.5;
+      ctx.stroke();
+    } else if (isLit) {
+      ctx.strokeStyle = "rgba(13, 13, 12, 0.12)";
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
     }
   }
-  for (const body of items) {
-    const lit = (!active || near.has(body.id)) && (!focused || focus.has(body.id));
-    context.globalAlpha = lit ? 1 : 0.12;
-    context.fillStyle = body.color;
-    context.beginPath();
-    context.arc(body.x, body.y, body.id === selected ? body.r + 1.6 : body.r, 0, Math.PI * 2);
-    context.fill();
-    if (body.id === selected || body.id === hover) {
-      context.strokeStyle = "#f4f7fb";
-      context.lineWidth = 1.4;
-      context.stroke();
-    }
+
+  // 3. Crisp single tooltip HUD for hovered or selected node
+  ctx.globalAlpha = 1.0;
+  const targetNode = nodes.find((n) => n.id === hoverId) || (selectedId ? nodes.find((n) => n.id === selectedId) : null);
+
+  if (targetNode) {
+    const labelText = targetNode.amount
+      ? `${targetNode.label} · $${targetNode.amount}`
+      : targetNode.label;
+
+    ctx.font = "600 12px 'Saans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+
+    const textWidth = ctx.measureText(labelText).width;
+    const lx = targetNode.projX;
+    const ly = targetNode.projY - targetNode.r * targetNode.projScale - 8;
+
+    // Frosted Pill Container
+    ctx.fillStyle = targetNode.id === selectedId ? "#0D0D0C" : "#FFFFFF";
+    ctx.beginPath();
+    ctx.roundRect(lx - textWidth / 2 - 8, ly - 18, textWidth + 16, 22, 6);
+    ctx.fill();
+
+    ctx.strokeStyle = targetNode.id === selectedId ? "#0D0D0C" : "rgba(231, 221, 210, 0.9)";
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    // Text Ink
+    ctx.fillStyle = targetNode.id === selectedId ? "#FFFFFF" : "#0D0D0C";
+    ctx.fillText(labelText, lx, ly - 4);
   }
-  context.globalAlpha = 1;
-  context.font = "11px Segoe UI, sans-serif";
-  context.textAlign = "center";
-  for (const body of items) {
-    const show = body.id === hover || body.id === selected || (near.has(body.id) && camera.k > 0.9) || (items.length < 40 && camera.k > 0.7);
-    if (!show) continue;
-    if (focused && !focus.has(body.id)) continue;
-    context.fillStyle = body.id === hover || body.id === selected ? "#f4f7fb" : "rgba(214, 222, 232, 0.78)";
-    context.fillText(body.label, body.x, body.y - body.r - 5);
-  }
-  context.restore();
 }
 
-function groupColor(group: string) {
-  if (group === "Vendors") return "#c0caf5";
-  if (group === "Transactions") return "#7dcfff";
-  if (group === "policy") return "#e0af68";
+function getNodeColor(node?: GraphNode | { group: string }): string {
+  const type = "type" in (node || {}) ? (node as GraphNode).type : "";
+  const group = node?.group || "";
+
+  if (type === "DECISION" || group === "Transactions") return "#FA6610";
+  if (type === "PURCHASE_ORDER") return "#10B981";
+  if (group === "Vendors") return "#2563EB";
+  if (group === "policy") return "#D97706";
+  if (type === "CONTRACT") return "#8B5CF6";
+  if ("redacted" in (node || {}) && (node as GraphNode).redacted) return "#94A3B8";
+
   let hash = 0;
   for (const char of group) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
   return PALETTE[hash % PALETTE.length];

@@ -64,8 +64,18 @@ export default function IngestPage() {
   const caseIds = Array.isArray(cases) ? cases.map(String) : [];
 
   return (
-    <main>
-      <h2>Read documents into the graph</h2>
+    <div className="shell">
+      <header className="top">
+        <div className="brand-row">
+          <a href="/" className="brand-title">Comma</a>
+          <span className="brand-tagline">Ingest Documents</span>
+        </div>
+        <nav className="nav-links">
+          <a href="/" className="nav-link">← Fullscreen Graph</a>
+        </nav>
+      </header>
+      <main>
+        <h2>Read documents into the graph</h2>
       <p className="muted">
         Upload one document or a set. Each transaction is its own step, so a pause, a stop, or a failure resumes at that step instead of starting over.
         A received date in the text is when the document becomes evidence. The date on the document is not.
@@ -114,5 +124,6 @@ export default function IngestPage() {
         </section>
       ) : null}
     </main>
+  </div>
   );
 }

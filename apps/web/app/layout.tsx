@@ -2,28 +2,14 @@ import "./globals.css";
 import type { ReactNode } from "react";
 
 export const metadata = {
-  title: "WorldState",
-  description: "A time machine for finance agents. Trace every decision to what was knowable at the time.",
+  title: "Comma — What was knowable at the time",
+  description: "A time machine for AI agents. Trace every decision to what was knowable at the time.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <div className="shell">
-          <header className="top">
-            <div>
-              <div className="eyebrow">WorldState</div>
-              <h1>What was knowable at the time</h1>
-            </div>
-            <nav className="row">
-              <a href="/">Graph</a>
-              <a href="/ingest">Ingest</a>
-            </nav>
-          </header>
-          {children}
-        </div>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
