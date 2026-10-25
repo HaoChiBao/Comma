@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -178,3 +178,75 @@ class AuditEvent(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     previous_event_hash: Mapped[str] = mapped_column(String(64))
     event_hash: Mapped[str] = mapped_column(String(64))
+
+
+class IngestJob(Base):
+    __tablename__ = "ingest_jobs"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    available_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class IngestDocument(Base):
+    __tablename__ = "ingest_documents"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("ingest_jobs.id"))
+    filename: Mapped[str] = mapped_column(String(300))
+    media_type: Mapped[str] = mapped_column(String(120), default="text/plain")
+    payload: Mapped[bytes] = mapped_column(LargeBinary)
+    text: Mapped[str] = mapped_column(Text, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+
+
+class IngestRecord(Base):
+    __tablename__ = "ingest_records"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("ingest_jobs.id"))
+    document_id: Mapped[str] = mapped_column(ForeignKey("ingest_documents.id"))
+    external_id: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(32))
+    vendor: Mapped[str] = mapped_column(String(200), default="")
+    entity_ref: Mapped[str] = mapped_column(String(80), default="")
+    references_json: Mapped[list] = mapped_column(JSON)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    document_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    text: Mapped[str] = mapped_column(Text)
+    formula: Mapped[str] = mapped_column(Text, default="")
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    version_id: Mapped[str] = mapped_column(String(64), default="")
+    episode_id: Mapped[str] = mapped_column(String(64), default="")
+
+
+class IngestStep(Base):
+    __tablename__ = "ingest_steps"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("ingest_jobs.id"))
+    document_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    record_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sequence: Mapped[int] = mapped_column()
+    name: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    detail_json: Mapped[dict] = mapped_column(JSON)
+    error: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GraphEpisode(Base):
+    __tablename__ = "graph_episodes"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("ingest_jobs.id"))
+    group_id: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    source_description: Mapped[str] = mapped_column(String(300))
+    reference_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    backend: Mapped[str] = mapped_column(String(32))
+    record_id: Mapped[str] = mapped_column(String(64))

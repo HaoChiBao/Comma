@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.db import configure, session
+from app.ingest.api import router as ingest_router
+from app.ingest.service import recover
 from app.routes import router
 from app.seed import seed
 from app.snapshots import AccessError
@@ -23,6 +25,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         with session() as db:
             seed(db)
+            recover(db)
         yield
 
     app = FastAPI(title="WorldState", lifespan=lifespan)
@@ -44,6 +47,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(router)
+    app.include_router(ingest_router)
     return app
 
 

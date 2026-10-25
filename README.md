@@ -51,4 +51,10 @@ The tests cover temporal filtering, version selection, role grants, cross-organi
 
 The walkthrough is in `docs/DEMO_SCRIPT.md`. Limits are in `docs/ARCHITECTURE.md`.
 
+## Document ingestion
+
+Open http://localhost:3000/ingest. Upload text, CSV, JSON, email, or PDF files, or run the Cloud Services sample. The run reads each document, finds every printed transaction, records it as evidence, and writes a Graphiti episode. Pause, stop, and resume keep the finished steps. A failed step is the step that runs again.
+
+Set `GRAPHITI_URI` to a Neo4j bolt URL and install `graphiti-core` when a transaction step should call [Graphiti](https://github.com/getzep/graphiti) `add_episode`. Without that connection, the same episode is stored in WorldState and can be sent to Graphiti on a later resume once the URI is set. A received date inside a document controls availability. The date printed on the document does not.
+
 `services/imessage` is the existing Spectrum and Deep Agents channel. It is not the historical evidence gateway and it is not part of the offline demo. The investigator that enforces time and access is the API.

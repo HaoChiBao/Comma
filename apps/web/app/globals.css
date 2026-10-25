@@ -83,6 +83,13 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0.2rem 0; }
 .ok { color: var(--green); }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
 .event { border-top: 1px solid var(--line); padding: 0.55rem 0; }
+.steps { list-style: none; padding: 0; margin: 1rem 0; }
+.steps li { display: grid; grid-template-columns: 1fr auto; gap: 0.2rem 1rem; border-top: 1px solid var(--line); padding: 0.45rem 0; }
+.steps li span, .steps small { color: var(--muted); }
+.steps li.completed span { color: var(--green); }
+.steps li.failed span, .steps li small { color: var(--red); }
+.steps li.running span { color: var(--amber); }
+.steps small { grid-column: 1 / -1; }
 @media (max-width: 900px) {
   .layout, .split { grid-template-columns: 1fr; }
   .graph { height: 460px; }
