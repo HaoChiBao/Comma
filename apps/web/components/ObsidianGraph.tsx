@@ -102,40 +102,46 @@ export function ObsidianGraph({
     const nodeIndexMap = new Map<string, number>();
     const placed: Node3D[] = [];
 
-    // Distribute nodes across the full screen in a 3D sphere using spherical Fibonacci lattice
+    // Distribute nodes in a 3D atomic structure: dense central nucleus + concentric orbital shells
     const count = nodes.length;
     const phi = (1 + Math.sqrt(5)) / 2; // Golden ratio
-
-    const el = frame.current;
-    const vpW = el?.clientWidth || (typeof window !== "undefined" ? window.innerWidth : 1200);
-    const vpH = el?.clientHeight || (typeof window !== "undefined" ? window.innerHeight : 800);
-    const sphereR = Math.max(340, Math.min(vpW, vpH) * 0.38) + Math.sqrt(count) * 16;
 
     nodes.forEach((node, i) => {
       const g = node.group || "General";
       const deg = degreeMap.get(node.id) || 0;
 
-      // Clean minimalistic node sizes (like Obsidian)
-      // Hubs / Key transactions / Decisions: ~8-12px radius
-      // Regular documents: ~5-7px radius
-      // Small leaves: ~3.5-5px radius
-      const isHub = deg >= 5 || node.type === "DECISION" || node.label.startsWith("JE") || node.group === "Vendors";
-      const baseRadius = isHub ? 7.5 + Math.min(4.5, deg * 0.6) : 4.0 + Math.min(2.5, deg * 0.4);
+      // Clean minimalistic node sizes
+      // Nucleus hubs (Decisions, Key POs, Vendors): ~7-10px radius
+      // Inner valence docs: ~5-6.5px radius
+      // Outer peripheral nodes: ~3.8-4.5px radius
+      const isNucleus = deg >= 5 || node.type === "DECISION" || node.label.startsWith("JE") || node.group === "Vendors";
+      const isInner = !isNucleus && (deg >= 2 || node.type === "PURCHASE_ORDER" || node.type === "CONTRACT");
+      const baseRadius = isNucleus ? 7.5 + Math.min(3.0, deg * 0.35) : isInner ? 5.2 + Math.min(1.8, deg * 0.25) : 3.8;
 
-      // Spherical distribution spread out across screen
+      // Stratified atomic orbital shell radii
+      let targetRadius = 220;
+      if (isNucleus) {
+        targetRadius = 28 + (i % 4) * 10; // Dense central nucleus
+      } else if (isInner) {
+        targetRadius = 115 + (i % 5) * 12; // Valence shell 1
+      } else {
+        targetRadius = 195 + (i % 6) * 14; // Valence shell 2
+      }
+
+      // Spherical distribution around the atom's shell
       const yNorm = 1 - (i / Math.max(count - 1, 1)) * 2; // -1 to 1
       const radiusAtY = Math.sqrt(Math.max(0, 1 - yNorm * yNorm));
       const theta = 2 * Math.PI * i / phi;
 
-      const x = Math.cos(theta) * radiusAtY * sphereR;
-      const y = yNorm * sphereR * 0.82;
-      const z = Math.sin(theta) * radiusAtY * sphereR;
+      const x = Math.cos(theta) * radiusAtY * targetRadius;
+      const y = yNorm * targetRadius * 0.80;
+      const z = Math.sin(theta) * radiusAtY * targetRadius;
 
       placed.push({
         id: node.id,
-        x: x + (Math.random() - 0.5) * 24,
-        y: y + (Math.random() - 0.5) * 24,
-        z: z + (Math.random() - 0.5) * 24,
+        x: x + (Math.random() - 0.5) * 14,
+        y: y + (Math.random() - 0.5) * 14,
+        z: z + (Math.random() - 0.5) * 14,
         vx: 0,
         vy: 0,
         vz: 0,
@@ -174,10 +180,11 @@ export function ObsidianGraph({
     }
     edgeList.current = edgesIndexed;
 
+    const el = frame.current;
     if (el) {
       camera.current.x = el.clientWidth / 2;
       camera.current.y = el.clientHeight / 2;
-      camera.current.k = el.clientWidth < 900 ? 0.75 : 0.95;
+      camera.current.k = el.clientWidth < 900 ? 0.85 : 1.05;
     }
 
     simAlpha.current = 1.0;
@@ -302,7 +309,7 @@ export function ObsidianGraph({
     if (!el) return;
     camera.current.x = el.clientWidth / 2;
     camera.current.y = el.clientHeight / 2;
-    camera.current.k = el.clientWidth < 900 ? 0.75 : 0.95;
+    camera.current.k = el.clientWidth < 900 ? 0.85 : 1.05;
     camera.current.rotX = 0.22;
     simAlpha.current = Math.max(simAlpha.current, 0.45);
   };
@@ -423,14 +430,13 @@ function step3DPhysics(
       if (distSq < 1) distSq = 1;
       const dist = Math.sqrt(distSq);
 
-      if (dist > 650) continue;
+      if (dist > 320) continue;
 
-      // Generous spacing force so nodes spread across the full screen
-      const force = (1400 / (distSq + 200)) * alpha;
+      const force = (540 / (distSq + 140)) * alpha;
 
-      const minD = a.r + b.r + 42; // Generous collision radius
+      const minD = a.r + b.r + 24; // Clean collision radius
       const overlap = minD - dist;
-      const push = overlap > 0 ? overlap * 0.14 * alpha : 0;
+      const push = overlap > 0 ? overlap * 0.20 * alpha : 0;
 
       const fx = (dx / dist) * (force + push);
       const fy = (dy / dist) * (force + push);
@@ -450,7 +456,7 @@ function step3DPhysics(
   }
 
   // 2. 3D Spring Links (Hooke's Law between connected documents)
-  const targetLinkDist = 130;
+  const targetLinkDist = 72;
   for (let e = 0; e < edges.length; e++) {
     const edge = edges[e];
     const a = nodes[edge.sourceIndex];
@@ -462,7 +468,7 @@ function step3DPhysics(
     let dz = b.z - a.z;
     let dist = Math.hypot(dx, dy, dz) || 0.1;
     const diff = (dist - targetLinkDist) / dist;
-    const springStrength = 0.026 * alpha;
+    const springStrength = 0.045 * alpha;
 
     const fx = dx * diff * springStrength;
     const fy = dy * diff * springStrength;
@@ -480,24 +486,34 @@ function step3DPhysics(
     }
   }
 
-  // 3. Atom Nucleus Gravity (gentle centering so nodes breathe across screen)
-  const gravity = 0.00065 * alpha;
-  const damping = 0.88;
+  // 3. Atomic Shell Gravitation: pulls nucleus to the core and keeps electron shells at cohesive orbital distances
+  const damping = 0.86;
 
   for (let i = 0; i < n; i++) {
     const a = nodes[i];
     if (a.id === draggedId) continue;
 
-    a.vx -= a.x * gravity;
-    a.vy -= a.y * gravity;
-    a.vz -= a.z * gravity;
+    const distFromOrigin = Math.hypot(a.x, a.y, a.z) || 0.1;
+    const isNucleus = a.degree >= 5 || a.type === "DECISION" || a.label.startsWith("JE") || a.group === "Vendors";
+    const isInner = !isNucleus && (a.degree >= 2 || a.type === "PURCHASE_ORDER" || a.type === "CONTRACT");
+
+    // Cohesive shell distances
+    const idealR = isNucleus ? 40 : isInner ? 135 : 215;
+    const shellDiff = (distFromOrigin - idealR) / distFromOrigin;
+
+    // Pull toward its orbital shell
+    const shellPull = shellDiff * (isNucleus ? 0.0038 : 0.0018) * alpha;
+
+    a.vx -= a.x * shellPull;
+    a.vy -= a.y * shellPull;
+    a.vz -= a.z * shellPull;
 
     a.vx *= damping;
     a.vy *= damping;
     a.vz *= damping;
 
     const speed = Math.hypot(a.vx, a.vy, a.vz);
-    const maxSpeed = 16;
+    const maxSpeed = 14;
     if (speed > maxSpeed) {
       a.vx = (a.vx / speed) * maxSpeed;
       a.vy = (a.vy / speed) * maxSpeed;
@@ -521,7 +537,7 @@ function project3DTo2D(
   const sinY = Math.sin(cam.rotY);
   const cosX = Math.cos(cam.rotX);
   const sinX = Math.sin(cam.rotX);
-  const focalLength = 950; // Natural wide telephoto perspective without distortion
+  const focalLength = 800; // Immersive 3D depth perspective
 
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
