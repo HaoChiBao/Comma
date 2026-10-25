@@ -21,6 +21,7 @@ export class FakeExcel {
 
   notes = new Map<string, string>();
   activeSheet = "Accruals";
+  usedRange: string | null = null;
 
   context(): Excel.RequestContext {
     const fake = this;
@@ -57,6 +58,7 @@ export class FakeExcel {
       notes: notes(sheet),
       activate: () => fake.writes.push(`activate ${sheet}`),
       getRange: (address: string) => fake.range(`${sheet}!${address}`),
+      getUsedRangeOrNullObject: () => fake.usedRange ? fake.range(`${sheet}!${fake.usedRange}`) : { load: () => undefined, isNullObject: true },
     });
     return {
       sync: async () => {
@@ -132,6 +134,16 @@ export class FakeExcel {
         const addresses = fake.precedents[key];
         if (!addresses) fake.pendingError = Object.assign(new Error("No precedents"), { code: "ItemNotFound" });
         return { load: () => undefined, addresses: addresses ?? [] };
+      },
+      getResizedRange: (rowDelta: number, columnDelta: number) => {
+        const endColumn = b.col + columnDelta;
+        const endRow = b.row + rowDelta;
+        const columnLabel = (index: number) => {
+          let label = "";
+          for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) label = String.fromCharCode(65 + ((value - 1) % 26)) + label;
+          return label;
+        };
+        return fake.range(`${sheet}!${columnLabel(a.col)}${a.row + 1}:${columnLabel(endColumn)}${endRow + 1}`);
       },
     };
   }

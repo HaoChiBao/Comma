@@ -12,25 +12,16 @@
 
 ## Excel version
 
-Setup: the API is running and has finished the company ingest, `npm run dev-server` is running in `apps/excel-addin`, and `fixtures/Decagon_Accruals.xlsx` is open with the WorldState pane sideloaded. The pane opens as Avery Lin, accountant, on Sep 30, 2025.
+Setup: finish the company ingest, generate `fixtures/Decagon_Accruals.xlsx`, start the API and add-in dev server, then open the workbook in Excel with the WorldState pane sideloaded.
 
-**0:00** The `Accruals` sheet has Decagon's ten September accruals, one per case. The invoice column is missing on purpose: in September, nobody had the invoices yet.
+**0:00** The idle view shows the current selection, an **Inspect** button, and cells flagged by a bounded scan of the active sheet. The generated `Accruals` sheet has ten September accruals. It leaves invoice amounts out because those invoices were not available at close.
 
-**0:30** Select `F2`, Cloud vendor C01, and click **Inspect**. The pane shows:
-- $150.00, posted as `ACR-C01-202509` (ledger `accrual_events.csv:ACR-C01-202509`).
-- A **Review** finding: vendor email MSG-0001 quoted $160 on Sep 25, a $10 difference. PO-C01-1123 ($145) also differs. It may be reasonable. It is not called incorrect.
-- Origin: no earlier source or sum accounts for $150.
-- Two linked sources are withheld.
+**0:30** Select `F2` (Cloud Services Inc., $150) and click **Inspect F2**. The result shows the API's **Review** status and explanation, the cell's source evidence, formula context, and ring graph. The PO (`PO-C01-1123`, $145) and email (`MSG-0001`, $160) are available; later or role-restricted sources appear without identifying details. Use **Open source** on the selected email to read it.
 
-**1:10** Click **Trace**. The graph links F2 to its posted entry and its PO (verified). It also links the email (it names the PO) and the contract (filed under the vendor), both as candidates, and two "Withheld" nodes. Click MSG-0001 to read the email.
+**1:10** Switch the snapshot to **Dec 15, 2025**. The December invoice (`INV-C01-381`, $158) now appears in the graph and sourced timeline, with a Dec 10 receipt date.
 
-**1:40** Switch to **Dec 15, 2025**. Invoice INV-C01-381 ($158) appears with document date Sep 28 and received date Dec 10. Its printed date never made it available in September. Opening it by id under the September trace returns 403.
+**1:40** Switch **Viewing as** to Noah Patel, auditor, then back to Avery Lin, accountant. Inspect `F8` (C07) to compare the role-scoped evidence. The finding status always matches the API response.
 
-**2:10** Back on Sep 30, select `F8` (C07) as Avery. It is **Supported** by PO-C07-1123. Two sources are withheld: the October invoice, and a contract this role is not allowed to read. Switch **Viewing as** to Noah Patel, auditor. Now contract CTR-0007 ($2,100) is visible, and the same cell needs **Review**.
-
-**2:40** As Avery on Sep 30:
-1. Select `A1:H11` and click **Scan range**. Seven accruals are flagged. Each one gets a yellow fill and a native note. Hover `F2` to read its note.
-2. C06, C07 and C08 are supported, and every PO amount agrees with its purchase order.
-3. Click **Clear WorldState highlights and notes**. The fills return, the notes are gone, and every value is unchanged.
+**2:10** Return to Avery and Sep 30. Select `A1:H11` and click **Scan selection & add notes**. Seven accruals are flagged and highlighted; each receives a native note. Hover `F2` to read its note. Click **Clear WorldState highlights and notes**; original fills return, WorldState notes are deleted, and values remain unchanged.
 
 Reset the local SQLite file by deleting `services/api/worldstate.db` and starting the API again. Docker starts from an empty Postgres volume and seeds on startup.

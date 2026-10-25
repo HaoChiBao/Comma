@@ -53,20 +53,15 @@ The walkthrough is in `docs/DEMO_SCRIPT.md`. Limits are in `docs/ARCHITECTURE.md
 
 ## Excel add-in
 
-`apps/excel-addin` is a WorldState task pane for Excel. It uses Office.js with React and TypeScript, and it is sideloaded rather than published. It traces the Decagon company's September accruals workbook against the ingested company documents. Select a cell and click **Inspect**. The pane shows:
+`apps/excel-addin` is a WorldState task pane for Excel. It uses Office.js with React and TypeScript, and is sideloaded rather than published. Its S2c layout presents the selected cell, the backend's finding, a compact formula view, a ring graph, source details, and a timeline of dates returned by the trace API. The pane adapts the existing inspect, scan, graph, and source responses; the API response contracts are unchanged.
 
-- the value and formula
-- the direct precedents (from Office.js `getDirectPrecedents`, ExcelApi 1.12)
-- the documents linked to the row, with each one's received date, file, and ledger row
-- where the amount could come from, taken from the stored origin claim
-- a Review / Unknown / Supported finding
+The actor and **as of** controls run each trace against a sealed snapshot. The idle view lists flagged cells from a bounded scan of the active sheet. Select a cell and click **Inspect** to open its trace. Click an available source in the graph detail to open the source panel. Excluded sources remain generic and do not expose their amount, date, id, or text in the sidebar.
 
-**Viewing as** switches between Avery Lin (accountant), Noah Patel (auditor), and Camille Ortiz (legal). The **as of** selector picks a date. Both re-run the trace against a sealed snapshot of the whole organization. A source that arrived later, or that the role cannot read, comes back as "withheld", with no content, amount, or date.
-
-**Scan range** highlights flagged cells and writes a native Excel note on each one, using the Notes API (ExcelApi 1.18), so hovering shows the finding.
+**Scan selection & add notes** highlights flagged cells in the selected range and writes a native Excel note on each one, using the Notes API (ExcelApi 1.18), so hovering shows the finding.
 - A WorldState note is updated on the next scan; a note someone else wrote is left alone.
 - On older Excel builds the highlights still apply, and the pane says notes are unavailable.
 - **Clear WorldState highlights and notes** restores the original fills and deletes only WorldState's notes.
+- Footer review actions are visual placeholders; they are not saved to the backend.
 
 The add-in never writes values or formulas.
 

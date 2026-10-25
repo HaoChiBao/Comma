@@ -86,6 +86,39 @@ export type Trace = {
   evidence: Evidence[];
 };
 
+/** Client-only shape used by the S2c sidebar. It is assembled from main's trace, graph, and Excel reads. */
+export type SidebarRelationship = "formula" | "supports" | "conflicts" | "shares" | "context" | "withheld";
+
+export type SidebarTraceItem = {
+  id: string;
+  kind: string;
+  label: string;
+  abbr: string;
+  amount: string | null;
+  currency?: string;
+  relationship: SidebarRelationship;
+  relationship_text: string;
+  details: { k: string; v: string }[];
+  source_id?: string;
+  available_at?: string | null;
+  cell?: string;
+};
+
+export type SidebarTimelineEvent = {
+  date: string | null;
+  text: string;
+  amount: string;
+  relationship: SidebarRelationship | "close" | "missing" | "marker" | "later";
+};
+
+export type SidebarTrace = Pick<Trace, "trace_id" | "snapshot_id" | "manifest_hash" | "as_of" | "actor_id" | "case_id" | "cell" | "status" | "title" | "summary" | "difference" | "unknowns" | "origin" | "lineage"> & {
+  headline: string;
+  formula_display: string;
+  calc: string;
+  items: SidebarTraceItem[];
+  timeline: SidebarTimelineEvent[];
+};
+
 export type GraphNode = {
   id: string;
   type: string;
