@@ -113,12 +113,23 @@ export function RadialWebGraph({
   const [rootId, setRootId] = useState<string>("");
   const [spotlightMode, setSpotlightMode] = useState<boolean>(true);
 
-  // Root Candidate list for the root picker dropdown
+  // Root Candidate list for the root picker dropdown: always includes current root
   const rootCandidates = useMemo(() => {
-    const list = nodes.filter((n) => n.type === "DECISION");
-    if (list.length === 0) return nodes.slice(0, 8);
-    return list;
-  }, [nodes]);
+    const map = new Map<string, GraphNode>();
+    if (rootId && nodeMap.has(rootId)) {
+      map.set(rootId, nodeMap.get(rootId)!);
+    }
+    for (const n of nodes) {
+      if (n.type === "DECISION" || n.label.startsWith("JE") || n.id.includes("cell:D3") || n.label === "D3") {
+        map.set(n.id, n);
+      }
+    }
+    const sorted = [...nodes].sort((a, b) => (adjacency.get(b.id)?.size || 0) - (adjacency.get(a.id)?.size || 0));
+    for (const n of sorted.slice(0, 15)) {
+      map.set(n.id, n);
+    }
+    return Array.from(map.values());
+  }, [nodes, rootId, nodeMap, adjacency]);
 
   useEffect(() => {
     if (nodes.length === 0) return;
@@ -194,7 +205,7 @@ export function RadialWebGraph({
   const handleResetToRoot = useCallback(() => {
     if (!rootId) return;
     pushHistory();
-    const neighbors = Array.from(adjacency.get(rootId) || []);
+    const neighbors = Array.from(adjacency.get(rootId) || []).filter((id) => id !== rootId);
 
     const newVisible = new Set<string>([rootId]);
     const newParents = new Map<string, string>();
@@ -250,7 +261,7 @@ export function RadialWebGraph({
   useEffect(() => {
     if (!rootId || !nodeMap.has(rootId)) return;
 
-    const neighbors = Array.from(adjacency.get(rootId) || []);
+    const neighbors = Array.from(adjacency.get(rootId) || []).filter((id) => id !== rootId);
     const newVisible = new Set<string>([rootId]);
     const newParents = new Map<string, string>();
     const newChildren = new Map<string, string[]>();
@@ -463,7 +474,7 @@ export function RadialWebGraph({
       }
 
       // 4. Unopened Node: Check neighbors
-      const allNeighbors = Array.from(adjacency.get(node.id) || []);
+      const allNeighbors = Array.from(adjacency.get(node.id) || []).filter((id) => id !== node.id);
       const newNeighbors = allNeighbors.filter((nid) => !visibleIds.has(nid));
 
       // 5. If all neighbors already on screen: draw cross-links and show toast
@@ -584,36 +595,28 @@ export function RadialWebGraph({
     return trail;
   }, [selected, treeParents, treeChildren]);
 
-  // Dynamic Camera Auto-Framing: smoothly glides the stage to center the selected node and its immediate children
+  // Stable, Calm Camera Framing: keeps root anchored on the left without jarring whip-pans
   useEffect(() => {
-    if (!selected || isPanning.current) return;
-    const target = treeNodes.find((n) => n.id === selected);
-    if (!target) return;
+    if (isPanning.current) return;
 
-    const kids = (treeChildren.get(selected) || [])
-      .map((kidId) => treeNodes.find((n) => n.id === kidId))
-      .filter(Boolean) as WebNode[];
+    // Anchor root at 130px from stage left
+    const baseAnchorX = 130;
+    const maxVisibleX = treeNodes.reduce((max, n) => Math.max(max, n.x), 0);
+    const visibleWidth = Math.max(340, dimensions.w - 440); // 440px reserved for drawer + margins
 
-    // Target focus point
-    let focusX = target.x;
-    let focusY = target.y;
+    let targetCamX = baseAnchorX - dimensions.w / 2;
 
-    if (kids.length > 0) {
-      focusX = target.x + 115; // Shift to frame both the selected node and its children
-      const avgKidY = kids.reduce((sum, k) => sum + k.y, 0) / kids.length;
-      focusY = (target.y + avgKidY) / 2;
+    // Only gently ease left if deep columns would be occluded by the drawer
+    const treeScreenRight = maxVisibleX * camera.k + baseAnchorX;
+    if (treeScreenRight > visibleWidth) {
+      targetCamX -= (treeScreenRight - visibleWidth + 40);
     }
 
-    // Visible stage area to the left of the drawer (drawer is 380px wide)
-    const visibleWidth = Math.max(340, dimensions.w - 420);
-    const targetScreenX = visibleWidth / 2;
-
-    setCamera((c) => ({
-      ...c,
-      x: targetScreenX - dimensions.w / 2 - focusX * c.k,
-      y: -focusY * c.k,
-    }));
-  }, [selected, treeNodes, treeChildren, dimensions.w]);
+    setCamera((c) => {
+      if (Math.abs(c.x - targetCamX) < 4 && Math.abs(c.y) < 4) return c;
+      return { ...c, x: targetCamX, y: 0 };
+    });
+  }, [treeNodes, dimensions.w, camera.k]);
 
   const maxDepth = useMemo(() => {
     let m = 0;
@@ -740,8 +743,8 @@ export function RadialWebGraph({
       <svg className="radial-svg">
         <g
           style={{
-            transform: `translate(${dimensions.w / 2 + camera.x}px, ${dimensions.h / 2 + camera.y}px) scale(${camera.k})`,
-            transition: isPanning.current ? "none" : "transform 0.32s cubic-bezier(0.23, 1, 0.32, 1)",
+            transform: `translate3d(${dimensions.w / 2 + camera.x}px, ${dimensions.h / 2 + camera.y}px, 0) scale(${camera.k})`,
+            transition: isPanning.current ? "none" : "transform 260ms cubic-bezier(0.23, 1, 0.32, 1)",
           }}
         >
           {/* 1. Subtle Column Tier Dividers */}
@@ -754,7 +757,7 @@ export function RadialWebGraph({
                 y1={-600}
                 x2={x}
                 y2={600}
-                stroke="rgba(13, 13, 12, 0.03)"
+                stroke="rgba(13, 13, 12, 0.04)"
                 strokeWidth={1}
                 strokeDasharray="4 4"
               />
@@ -772,6 +775,7 @@ export function RadialWebGraph({
               const edgeData = edgeMap.get(`${n.parentId}|${n.id}`) || edgeMap.get(`${n.id}|${n.parentId}`);
               const edgeType = edgeData?.type || "CONNECTS";
               const isSelected = selected === n.id || selected === n.parentId;
+              const isHovered = hoveredId === n.id || hoveredId === n.parentId;
               const isContradiction = edgeType === "CONTRADICTS";
               const isSupports = edgeType === "RECONCILES_WITH" || edgeType === "POTENTIALLY_SUPPORTS";
               const isDashed = n.isGroup || edgeType === "POTENTIALLY_SUPPORTS";
@@ -780,14 +784,12 @@ export function RadialWebGraph({
                 ? "#FA6610"
                 : isSupports
                 ? "#10B981"
-                : isSelected
-                ? "rgba(13, 13, 12, 0.65)"
-                : "rgba(13, 13, 12, 0.16)";
+                : isSelected || isHovered
+                ? "#0D0D0C"
+                : "rgba(13, 13, 12, 0.24)";
 
-              const strokeW = isSelected ? 1.8 : 1.1;
-
-              // Check if edge is in active spotlight trail
-              const isEdgeInFocus = !selected || !spotlightMode || (activeTrail.has(n.parentId!) && activeTrail.has(n.id));
+              const strokeW = isSelected || isHovered ? 2.2 : isContradiction || isSupports ? 1.8 : 1.3;
+              const edgeOpacity = isSelected || isHovered ? 1.0 : isContradiction || isSupports ? 0.95 : 0.65;
 
               // Smooth horizontal cubic bezier curve
               const dx = c.x - p.x;
@@ -803,9 +805,9 @@ export function RadialWebGraph({
                   stroke={strokeColor}
                   strokeWidth={strokeW}
                   strokeDasharray={isDashed ? "4 4" : "none"}
-                  opacity={isEdgeInFocus ? 1 : 0.08}
+                  opacity={edgeOpacity}
                   style={{
-                    transition: "d 0.24s cubic-bezier(0.23, 1, 0.32, 1), stroke 0.15s ease, opacity 0.22s ease",
+                    transition: "stroke 0.15s ease, opacity 0.18s ease",
                   }}
                 />
               );
@@ -829,32 +831,26 @@ export function RadialWebGraph({
                 d={`M ${p1.x} ${p1.y} Q ${cpx} ${cpy} ${p2.x} ${p2.y}`}
                 fill="none"
                 stroke="#FA6610"
-                strokeWidth={1.4}
+                strokeWidth={1.5}
                 strokeDasharray="4 4"
                 opacity={0.85}
               />
             );
           })}
 
-          {/* 4. Nodes */}
-          {treeNodes.map((n) => {
+          {/* 4. Nodes (All Visible, High Contrast, Smooth Staggered Transitions) */}
+          {treeNodes.map((n, idx) => {
             const pos = posMap.get(n.id) || { x: n.x, y: n.y };
             const isSelected = selected === n.id;
             const isHovered = hoveredId === n.id;
             const color = getNodeColor(n.type);
-            const r = n.isRoot ? 11 : 7.5;
+            const r = n.isRoot ? 11.5 : 8;
 
-            // Spotlight focus check: active path or children
-            const isNodeInFocus = !selected || !spotlightMode || activeTrail.has(n.id);
-
-            // Fill & Stroke logic:
-            // Fill = type color when root or opened; white with type-colored stroke otherwise.
             const isFilled = n.isRoot || n.isOpen;
             const fill = isFilled ? color : "#FFFFFF";
             const stroke = isSelected || isHovered ? "#0D0D0C" : color;
             const strokeWidth = isSelected ? 2.5 : isHovered ? 2.0 : isFilled ? 1.5 : 2.0;
 
-            // Label positioning strictly to the right of node
             const labelX = r + 8;
             const labelY = 3.5;
 
@@ -863,9 +859,10 @@ export function RadialWebGraph({
                 key={n.id}
                 className="radial-node-group"
                 style={{
-                  transform: `translate(${pos.x}px, ${pos.y}px)`,
-                  opacity: isNodeInFocus ? 1 : 0.16,
-                  transition: "transform 0.24s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.22s ease",
+                  transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`,
+                  opacity: 1,
+                  transition: "transform 240ms cubic-bezier(0.23, 1, 0.32, 1), opacity 180ms cubic-bezier(0.23, 1, 0.32, 1)",
+                  transitionDelay: `${Math.min(idx * 16, 160)}ms`,
                   cursor: "pointer",
                 }}
                 onClick={(e) => {
@@ -875,23 +872,23 @@ export function RadialWebGraph({
                 onPointerEnter={() => setHoveredId(n.id)}
                 onPointerLeave={() => setHoveredId(null)}
               >
-                {/* Selected Halo */}
+                {/* Selected Halo Ring */}
                 {isSelected && (
                   <circle
                     r={r + 5}
                     fill="none"
                     stroke="#0D0D0C"
-                    strokeWidth={1.5}
-                    opacity={0.25}
+                    strokeWidth={2}
+                    opacity={0.3}
                   />
                 )}
 
                 {/* Group Node: 3 Offset Hollow Circles */}
                 {n.isGroup ? (
                   <g className="group-circles">
-                    <circle cx={-3} cy={-2} r={r} fill="#FFFFFF" stroke={color} strokeWidth={1.5} />
-                    <circle cx={0} cy={0} r={r} fill="#FFFFFF" stroke={color} strokeWidth={1.5} />
-                    <circle cx={3} cy={2} r={r} fill="#FFFFFF" stroke="#0D0D0C" strokeWidth={1.5} />
+                    <circle cx={-3} cy={-2} r={r} fill="#FFFFFF" stroke={color} strokeWidth={1.6} />
+                    <circle cx={0} cy={0} r={r} fill="#FFFFFF" stroke={color} strokeWidth={1.6} />
+                    <circle cx={3} cy={2} r={r} fill="#FFFFFF" stroke="#0D0D0C" strokeWidth={1.6} />
                   </g>
                 ) : (
                   /* Standard Node Circle */
@@ -908,16 +905,16 @@ export function RadialWebGraph({
                   <circle r={2.5} fill={color} />
                 )}
 
-                {/* Label Placed to the Right */}
+                {/* High Contrast Crisp Label */}
                 <text
                   x={labelX}
                   y={labelY}
                   textAnchor="start"
                   className="radial-node-label"
-                  fill={isSelected ? "#0D0D0C" : "rgba(13, 13, 12, 0.85)"}
+                  fill="#0D0D0C"
                   fontWeight={isSelected ? 700 : n.isRoot ? 600 : 500}
-                  fontSize={n.isRoot ? 12 : 11}
-                  fontFamily="'Saans', -apple-system, sans-serif"
+                  fontSize={n.isRoot ? 12 : 11.5}
+                  fontFamily="'Saans', -apple-system, BlinkMacSystemFont, sans-serif"
                 >
                   {n.isGroup
                     ? n.label
